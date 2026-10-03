@@ -240,8 +240,11 @@ class RunnerService : Service() {
         }
     }
 
-    private fun readOnce(waitMs: Long): Int? {
-        val svc = AtsAccessibilityService.instance ?: return null
+    // Satu kali baca. Alasan gagal diambil dari layanan aksesibilitas.
+    private fun readOnce(waitMs: Long): Pair<Int?, String> {
+        val svc = AtsAccessibilityService.instance
+            ?: return Pair(null, "layanan aksesibilitas mati")
+        AtsAccessibilityService.lastReason = ""
         val latch = CountDownLatch(1)
         var r: Int? = null
         main.post {
@@ -250,28 +253,39 @@ class RunnerService : Service() {
                 latch.countDown()
             }
         }
-        latch.await(waitMs, TimeUnit.MILLISECONDS)
-        return r
+        val ok = latch.await(waitMs, TimeUnit.MILLISECONDS)
+        if (r != null) return Pair(r, "")
+        val why = AtsAccessibilityService.lastReason
+        return Pair(
+            null,
+            if (why.isNotEmpty()) why
+            else if (!ok) "tidak ada jawaban dari layanan (timeout)"
+            else "gagal tanpa alasan"
+        )
     }
 
     // Baca server berulang-ulang, tapi tidak boleh melewati batas waktu (deadline).
     // Sebelum percobaan pertama ada tahan singkat supaya layar aplikasi
-    // sebelumnya tidak ikut terbaca.
+    // sebelumnya tidak ikut terbaca. Jarak antar percobaan 1100 ms
+    // (batas screenshot Android). Alasan gagal dicatat di log.
     private fun readUntil(t0: Long, d1: Long, deadline: Long): Int? {
         val hold = minOf(1500L, d1 / 3)
         sleepUntil(t0 + hold)
         var tries = 0
+        val reasons = ArrayList<String>()
         while (!stopRequested) {
             val left = deadline - android.os.SystemClock.uptimeMillis()
             if (left < 500) break
             tries++
-            val r = readOnce(minOf(left - 200, 8000L))
-            if (r != null) return r
+            val res = readOnce(minOf(left - 200, 8000L))
+            if (res.first != null) return res.first
+            if (reasons.size < 4 && !reasons.contains(res.second)) reasons.add(res.second)
             val gap = deadline - android.os.SystemClock.uptimeMillis()
             if (gap <= 0) break
-            sleepMs(minOf(400L, gap))
+            sleepMs(minOf(1100L, gap))
         }
         addLog("Baca layar: $tries percobaan, tidak ketemu")
+        for (r in reasons) addLog("  alasan: $r")
         return null
     }
 
