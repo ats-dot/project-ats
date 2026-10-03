@@ -160,13 +160,14 @@ class RunnerService : Service() {
         val d1 = intent.getLongExtra("d1", 7450L)
         val d2 = intent.getLongExtra("d2", 6500L)
         val d3 = intent.getLongExtra("d3", 600L)
+        val rs = intent.getLongExtra("rs", 5000L)
         val target = intent.getIntExtra("target", 0)
         val back = intent.getBooleanExtra("back", false)
 
         startAsForeground()
         running = true
         stopRequested = false
-        Thread { runAll(pkgs.toList(), d1, d2, d3, target, back) }.start()
+        Thread { runAll(pkgs.toList(), d1, d2, d3, rs, target, back) }.start()
         return START_NOT_STICKY
     }
 
@@ -264,20 +265,18 @@ class RunnerService : Service() {
         )
     }
 
-    // Baca server berulang-ulang, tapi tidak boleh melewati batas waktu (deadline).
-    // Sebelum percobaan pertama ada tahan singkat supaya layar aplikasi
-    // sebelumnya tidak ikut terbaca. Jarak antar percobaan 1100 ms
-    // (batas screenshot Android). Alasan gagal dicatat di log.
-    private fun readUntil(t0: Long, d1: Long, deadline: Long): Int? {
-        val hold = minOf(1500L, d1 / 3)
-        sleepUntil(t0 + hold)
+    // Baca server di akhir jatah waktu: mulai di detik "rs" (bawaan 5000 ms).
+    // Tiap percobaan maksimal 3 detik supaya tidak menggantung.
+    // Jarak antar percobaan 1100 ms (batas screenshot Android).
+    private fun readUntil(t0: Long, rs: Long, deadline: Long): Int? {
+        sleepUntil(minOf(t0 + rs, deadline - 1500L))
         var tries = 0
         val reasons = ArrayList<String>()
         while (!stopRequested) {
             val left = deadline - android.os.SystemClock.uptimeMillis()
-            if (left < 500) break
+            if (left < 700) break
             tries++
-            val res = readOnce(minOf(left - 200, 8000L))
+            val res = readOnce(minOf(left - 100, 3000L))
             if (res.first != null) return res.first
             if (reasons.size < 4 && !reasons.contains(res.second)) reasons.add(res.second)
             val gap = deadline - android.os.SystemClock.uptimeMillis()
@@ -324,7 +323,7 @@ class RunnerService : Service() {
         )
     }
 
-    private fun runAll(pkgs: List<String>, d1: Long, d2: Long, d3: Long, target: Int, back: Boolean) {
+    private fun runAll(pkgs: List<String>, d1: Long, d2: Long, d3: Long, rs: Long, target: Int, back: Boolean) {
         done = 0
         found = 0
         total = pkgs.size
@@ -332,7 +331,7 @@ class RunnerService : Service() {
         setServers(map)
 
         addLog("$MARK ${dateFmt.format(Date())} =====")
-        addLog("Jeda 1 = $d1 ms, jeda 2 = $d2 ms, jeda tengah = $d3 ms, target = $target")
+        addLog("Jeda 1 = $d1 ms, jeda 2 = $d2 ms, jeda tengah = $d3 ms, mulai baca = $rs ms, target = $target")
         ensureAccessibility()
         AtsAccessibilityService.updateAllowed(pkgs.toSet())
 
@@ -360,7 +359,7 @@ class RunnerService : Service() {
             }
             addLog("Buka $pkg")
             val deadline = t0 + d1
-            val s = readUntil(t0, d1, deadline)
+            val s = readUntil(t0, rs, deadline)
             // Walau sudah terbaca, tetap tunggu sampai jatah habis
             sleepUntil(deadline)
 
