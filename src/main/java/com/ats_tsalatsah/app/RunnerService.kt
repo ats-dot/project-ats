@@ -90,7 +90,7 @@ class RunnerService : Service() {
         val n: Notification = Notification.Builder(this, "ats")
             .setContentTitle("Project ats")
             .setContentText("Sedang berjalan")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_notif)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -143,11 +143,14 @@ class RunnerService : Service() {
         return null
     }
 
-    private fun dismiss() {
-        val svc = AtsAccessibilityService.instance ?: return
-        val latch = CountDownLatch(1)
-        main.post { svc.dismissFromRecents { latch.countDown() } }
-        latch.await(6, TimeUnit.SECONDS)
+    // Force stop lewat Shizuku, tanpa animasi. Hanya untuk aplikasi yang dicentang.
+    private fun dismiss(pkg: String) {
+        if (!ShizukuHelper.hasPermission()) {
+            addLog("Shizuku belum aktif/diizinkan, $pkg tidak di-force stop")
+            return
+        }
+        val ok = ShizukuHelper.forceStop(pkg)
+        addLog(if (ok) "Force stop $pkg berhasil" else "Force stop $pkg gagal")
     }
 
     private fun runAll(pkgs: List<String>, d1: Long, d2: Long, target: Int, back: Boolean) {
@@ -159,6 +162,9 @@ class RunnerService : Service() {
 
         if (AtsAccessibilityService.instance == null) {
             addLog("Izin Aksesibilitas belum aktif. Nyalakan dulu di Setelan.")
+        }
+        if (!ShizukuHelper.hasPermission()) {
+            addLog("Shizuku belum aktif/diizinkan. Cek tab Setelan.")
         }
 
         // Putaran 1
@@ -179,11 +185,11 @@ class RunnerService : Service() {
             sleepMs(d1)
             val s = readServer()
             if (s == null) {
-                addLog("Server tidak terbaca, buang $pkg dari recent apps")
-                dismiss()
+                addLog("Server tidak terbaca, force stop $pkg")
+                dismiss(pkg)
             } else if (map.containsKey(s)) {
-                addLog("Server $s sudah ada, buang $pkg dari recent apps")
-                dismiss()
+                addLog("Server $s sudah ada, force stop $pkg")
+                dismiss(pkg)
             } else {
                 map[s] = pkg
                 found = map.size
