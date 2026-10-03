@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -35,13 +36,60 @@ class RunnerService : Service() {
         @Volatile var found = 0
         @Volatile var phase = "Siap"
         private val logs = ArrayList<String>()
+        private val servers = ArrayList<String>()
+        private var prefs: SharedPreferences? = null
         private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+
+        // Muat log dan daftar server yang tersimpan
+        fun initStore(ctx: Context) {
+            synchronized(logs) {
+                if (prefs != null) return
+                val p = ctx.applicationContext.getSharedPreferences("ats_store", Context.MODE_PRIVATE)
+                prefs = p
+                val l = p.getString("logs", "") ?: ""
+                if (l.isNotEmpty()) logs.addAll(l.split("\n"))
+                val s = p.getString("servers", "") ?: ""
+                if (s.isNotEmpty()) servers.addAll(s.split("\n"))
+            }
+        }
+
+        private fun persist() {
+            prefs?.edit()
+                ?.putString("logs", logs.joinToString("\n"))
+                ?.putString("servers", servers.joinToString("\n"))
+                ?.apply()
+        }
 
         fun addLog(s: String) {
             synchronized(logs) {
                 logs.add(fmt.format(Date()) + "  " + s)
-                if (logs.size > 300) logs.removeAt(0)
+                if (logs.size > 500) logs.removeAt(0)
+                persist()
             }
+        }
+
+        // Simpan daftar server, urut dari kecil ke besar
+        fun setServers(map: Map<Int, String>) {
+            synchronized(logs) {
+                servers.clear()
+                map.entries.sortedBy { it.key }.forEach { servers.add("${it.key}  ${it.value}") }
+                persist()
+            }
+        }
+
+        // Hapus log dan daftar server (tidak bisa saat sedang berjalan)
+        fun clearAll(): Boolean {
+            if (running) return false
+            synchronized(logs) {
+                logs.clear()
+                servers.clear()
+                persist()
+            }
+            found = 0
+            done = 0
+            total = 0
+            phase = "Siap"
+            return true
         }
 
         fun statusJson(): String {
@@ -52,8 +100,13 @@ class RunnerService : Service() {
             o.put("found", found)
             o.put("phase", phase)
             val arr = JSONArray()
-            synchronized(logs) { logs.forEach { arr.put(it) } }
+            val srv = JSONArray()
+            synchronized(logs) {
+                logs.forEach { arr.put(it) }
+                servers.forEach { srv.put(it) }
+            }
             o.put("logs", arr)
+            o.put("servers", srv)
             return o.toString()
         }
     }
@@ -61,6 +114,11 @@ class RunnerService : Service() {
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var stopRequested = false
     private var capsule: TextView? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        initStore(this)
+    }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -158,8 +216,10 @@ class RunnerService : Service() {
         found = 0
         total = pkgs.size
         val map = LinkedHashMap<Int, String>()
+        setServers(map)
         AtsAccessibilityService.updateAllowed(pkgs.toSet())
 
+        addLog("===== Sesi baru =====")
         if (AtsAccessibilityService.instance == null) {
             addLog("Izin Aksesibilitas belum aktif. Nyalakan dulu di Setelan.")
         }
@@ -193,6 +253,7 @@ class RunnerService : Service() {
             } else {
                 map[s] = pkg
                 found = map.size
+                setServers(map)
                 addLog("Server $s dicatat ($pkg)")
             }
             done++
