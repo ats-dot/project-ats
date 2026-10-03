@@ -21,11 +21,17 @@ class AtsAccessibilityService : AccessibilityService() {
         // Alasan kegagalan baca terakhir, dibaca RunnerService untuk log
         @Volatile var lastReason: String = ""
 
-        // Android membatasi screenshot sekitar 1 per detik
+        // Android membatasi screenshot aksesibilitas sekitar 1 per detik
         private const val MIN_GAP = 1100L
 
         // Urutan arah putar OCR: 90 dan 270 dulu (tulisan game menyamping)
         private val ANGLES = intArrayOf(90, 270, 0, 180)
+
+        // Pembaca teks. Ada di sini (bukan di layanan) supaya tetap bisa
+        // dipakai walau layanan aksesibilitas sedang mati.
+        private val recognizer by lazy {
+            TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+        }
 
         fun isReady(): Boolean = instance != null
 
@@ -44,9 +50,82 @@ class AtsAccessibilityService : AccessibilityService() {
             }
             return null
         }
+
+        private fun short(s: String): String {
+            val t = s.replace("\n", " ").trim()
+            if (t.isEmpty()) return "(kosong)"
+            return if (t.length > 90) t.substring(0, 90) + "..." else t
+        }
+
+        private fun rotate(src: Bitmap, deg: Int): Bitmap {
+            if (deg == 0) return src
+            val m = Matrix()
+            m.postRotate(deg.toFloat())
+            return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
+        }
+
+        // Coba OCR di 4 arah putar sampai server ketemu
+        private fun ocr(bmp: Bitmap, idx: Int, seen: StringBuilder, callback: (Int?) -> Unit) {
+            if (idx >= ANGLES.size) {
+                lastReason = "OCR jalan di 4 arah, server tidak ketemu. Teks terbaca: " + short(seen.toString())
+                callback(null)
+                return
+            }
+            val deg = ANGLES[idx]
+            val rot: Bitmap
+            val img: InputImage
+            try {
+                rot = rotate(bmp, deg)
+                img = InputImage.fromBitmap(rot, 0)
+            } catch (e: Throwable) {
+                lastReason = "error putar gambar: " + (e.message ?: "?")
+                callback(null)
+                return
+            }
+            try {
+                recognizer.process(img)
+                    .addOnSuccessListener {
+                        val s = pickServer(it.text)
+                        if (s != null) {
+                            lastReason = ""
+                            callback(s)
+                        } else {
+                            if (seen.length < 200) seen.append(" [").append(deg).append("] ").append(it.text)
+                            ocr(bmp, idx + 1, seen, callback)
+                        }
+                    }
+                    .addOnFailureListener {
+                        lastReason = "OCR error: " + (it.message ?: "?")
+                        callback(null)
+                    }
+                    .addOnCompleteListener {
+                        // Buang salinan putaran (bukan gambar asli)
+                        if (rot !== bmp) {
+                            try {
+                                rot.recycle()
+                            } catch (e: Throwable) {
+                            }
+                        }
+                    }
+            } catch (e: Throwable) {
+                lastReason = "OCR tidak bisa dijalankan: " + (e.message ?: "?")
+                callback(null)
+            }
+        }
+
+        // Baca server dari sebuah gambar (mis. dari screencap Shizuku).
+        // Gambar diambil alih dan dibebaskan sendiri setelah selesai.
+        fun ocrBitmap(bmp: Bitmap, callback: (Int?) -> Unit) {
+            ocr(bmp, 0, StringBuilder()) { r ->
+                try {
+                    if (!bmp.isRecycled) bmp.recycle()
+                } catch (e: Throwable) {
+                }
+                callback(r)
+            }
+        }
     }
 
-    private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     private var lastShot = 0L
 
     override fun onServiceConnected() {
@@ -78,52 +157,7 @@ class AtsAccessibilityService : AccessibilityService() {
         return rootInActiveWindow?.packageName?.toString() ?: lastPackage
     }
 
-    private fun short(s: String): String {
-        val t = s.replace("\n", " ").trim()
-        if (t.isEmpty()) return "(kosong)"
-        return if (t.length > 90) t.substring(0, 90) + "..." else t
-    }
-
-    private fun rotate(src: Bitmap, deg: Int): Bitmap {
-        if (deg == 0) return src
-        val m = Matrix()
-        m.postRotate(deg.toFloat())
-        return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
-    }
-
-    // Coba OCR di 4 arah putar sampai server ketemu
-    private fun ocr(bmp: Bitmap, idx: Int, seen: StringBuilder, callback: (Int?) -> Unit) {
-        if (idx >= ANGLES.size) {
-            lastReason = "OCR jalan di 4 arah, server tidak ketemu. Teks terbaca: " + short(seen.toString())
-            callback(null)
-            return
-        }
-        val deg = ANGLES[idx]
-        val img = try {
-            InputImage.fromBitmap(rotate(bmp, deg), 0)
-        } catch (e: Exception) {
-            lastReason = "error putar gambar: " + (e.message ?: "?")
-            callback(null)
-            return
-        }
-        recognizer.process(img)
-            .addOnSuccessListener {
-                val s = pickServer(it.text)
-                if (s != null) {
-                    lastReason = ""
-                    callback(s)
-                } else {
-                    if (seen.length < 200) seen.append(" [").append(deg).append("] ").append(it.text)
-                    ocr(bmp, idx + 1, seen, callback)
-                }
-            }
-            .addOnFailureListener {
-                lastReason = "OCR error: " + (it.message ?: "?")
-                callback(null)
-            }
-    }
-
-    // Baca server dari layar (screenshot + OCR).
+    // Jalur cadangan: baca server lewat screenshot aksesibilitas + OCR.
     // Hanya jalan kalau layar depan = aplikasi yang dicentang.
     fun readServer(callback: (Int?) -> Unit) {
         if (Build.VERSION.SDK_INT < 30) {
@@ -149,13 +183,17 @@ class AtsAccessibilityService : AccessibilityService() {
                 try {
                     val hw = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
                     val bmp = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                    try {
+                        hw?.recycle()
+                    } catch (e: Throwable) {
+                    }
                     result.hardwareBuffer.close()
                     if (bmp == null) {
                         lastReason = "gambar screenshot kosong"
                         callback(null)
                         return
                     }
-                    ocr(bmp, 0, StringBuilder(), callback)
+                    ocrBitmap(bmp, callback)
                 } catch (e: Exception) {
                     lastReason = "error olah gambar: " + (e.message ?: "?")
                     callback(null)
