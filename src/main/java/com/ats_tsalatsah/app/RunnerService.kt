@@ -32,6 +32,10 @@ import java.util.concurrent.TimeUnit
 class RunnerService : Service() {
 
     companion object {
+        const val MARK = "===== Sesi baru"
+        private const val MAX_SESSIONS = 20
+        private const val MAX_LINES = 4000
+
         @Volatile var running = false
         @Volatile var done = 0
         @Volatile var total = 0
@@ -41,6 +45,7 @@ class RunnerService : Service() {
         private val servers = ArrayList<String>()
         private var prefs: SharedPreferences? = null
         private val fmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+        private val dateFmt = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US)
 
         // Muat log dan daftar server yang tersimpan
         fun initStore(ctx: Context) {
@@ -62,10 +67,30 @@ class RunnerService : Service() {
                 ?.apply()
         }
 
+        private fun sessionCount(): Int = logs.count { it.contains(MARK) }
+
+        // Buang satu sesi utuh yang paling lama (bukan baris acak)
+        private fun trimLogs() {
+            while (logs.size > MAX_LINES || sessionCount() > MAX_SESSIONS) {
+                var idx = -1
+                for (i in 1 until logs.size) {
+                    if (logs[i].contains(MARK)) {
+                        idx = i
+                        break
+                    }
+                }
+                if (idx > 0) {
+                    for (k in 0 until idx) logs.removeAt(0)
+                } else {
+                    logs.removeAt(0)
+                }
+            }
+        }
+
         fun addLog(s: String) {
             synchronized(logs) {
                 logs.add(fmt.format(Date()) + "  " + s)
-                if (logs.size > 1500) logs.removeAt(0)
+                trimLogs()
                 persist()
             }
         }
@@ -134,13 +159,14 @@ class RunnerService : Service() {
         val pkgs = intent.getStringArrayExtra("pkgs") ?: emptyArray()
         val d1 = intent.getLongExtra("d1", 7450L)
         val d2 = intent.getLongExtra("d2", 6500L)
+        val d3 = intent.getLongExtra("d3", 600L)
         val target = intent.getIntExtra("target", 0)
         val back = intent.getBooleanExtra("back", false)
 
         startAsForeground()
         running = true
         stopRequested = false
-        Thread { runAll(pkgs.toList(), d1, d2, target, back) }.start()
+        Thread { runAll(pkgs.toList(), d1, d2, d3, target, back) }.start()
         return START_NOT_STICKY
     }
 
@@ -180,10 +206,16 @@ class RunnerService : Service() {
     private fun sleepMs(ms: Long) {
         var left = ms
         while (left > 0 && !stopRequested) {
-            val s = if (left > 100) 100L else left
+            val s = if (left > 50) 50L else left
             Thread.sleep(s)
             left -= s
         }
+    }
+
+    // Tunggu sampai jam tertentu (uptime), supaya waktu per aplikasi tetap
+    private fun sleepUntil(t: Long) {
+        val left = t - android.os.SystemClock.uptimeMillis()
+        if (left > 0) sleepMs(left)
     }
 
     private fun launch(pkg: String): Boolean {
@@ -208,7 +240,7 @@ class RunnerService : Service() {
         }
     }
 
-    private fun readOnce(): Int? {
+    private fun readOnce(waitMs: Long): Int? {
         val svc = AtsAccessibilityService.instance ?: return null
         val latch = CountDownLatch(1)
         var r: Int? = null
@@ -218,17 +250,28 @@ class RunnerService : Service() {
                 latch.countDown()
             }
         }
-        latch.await(8, TimeUnit.SECONDS)
+        latch.await(waitMs, TimeUnit.MILLISECONDS)
         return r
     }
 
-    private fun readServer(): Int? {
-        for (i in 1..3) {
-            if (stopRequested) return null
-            val r = readOnce()
+    // Baca server berulang-ulang, tapi tidak boleh melewati batas waktu (deadline).
+    // Sebelum percobaan pertama ada tahan singkat supaya layar aplikasi
+    // sebelumnya tidak ikut terbaca.
+    private fun readUntil(t0: Long, d1: Long, deadline: Long): Int? {
+        val hold = minOf(1500L, d1 / 3)
+        sleepUntil(t0 + hold)
+        var tries = 0
+        while (!stopRequested) {
+            val left = deadline - android.os.SystemClock.uptimeMillis()
+            if (left < 500) break
+            tries++
+            val r = readOnce(minOf(left - 200, 8000L))
             if (r != null) return r
-            sleepMs(700)
+            val gap = deadline - android.os.SystemClock.uptimeMillis()
+            if (gap <= 0) break
+            sleepMs(minOf(400L, gap))
         }
+        addLog("Baca layar: $tries percobaan, tidak ketemu")
         return null
     }
 
@@ -249,25 +292,33 @@ class RunnerService : Service() {
 
     private fun ensureAccessibility() {
         if (AtsAccessibilityService.instance != null) return
-        if (!ShizukuHelper.hasPermission()) return
+        if (!ShizukuHelper.hasPermission()) {
+            addLog("Aksesibilitas mati dan Shizuku belum diizinkan")
+            return
+        }
         addLog("Aksesibilitas mati, menyalakan lewat Shizuku")
-        ShizukuHelper.enableAccessibility()
+        val rep = ShizukuHelper.enableAccessibility()
+        addLog("Hasil penyalaan " + (if (rep.first) "OK: " else "GAGAL: ") + rep.second)
         var t = 0
         while (AtsAccessibilityService.instance == null && t < 40 && !stopRequested) {
             Thread.sleep(100)
             t++
         }
-        addLog(if (AtsAccessibilityService.instance != null) "Aksesibilitas aktif" else "Aksesibilitas belum aktif")
+        addLog(
+            if (AtsAccessibilityService.instance != null) "Layanan aksesibilitas hidup"
+            else "Layanan aksesibilitas TIDAK hidup setelah menunggu 4 detik"
+        )
     }
 
-    private fun runAll(pkgs: List<String>, d1: Long, d2: Long, target: Int, back: Boolean) {
+    private fun runAll(pkgs: List<String>, d1: Long, d2: Long, d3: Long, target: Int, back: Boolean) {
         done = 0
         found = 0
         total = pkgs.size
         val map = LinkedHashMap<Int, String>()
         setServers(map)
 
-        addLog("===== Sesi baru =====")
+        addLog("$MARK ${dateFmt.format(Date())} =====")
+        addLog("Jeda 1 = $d1 ms, jeda 2 = $d2 ms, jeda tengah = $d3 ms, target = $target")
         ensureAccessibility()
         AtsAccessibilityService.updateAllowed(pkgs.toSet())
 
@@ -278,7 +329,7 @@ class RunnerService : Service() {
             addLog("Shizuku belum aktif/diizinkan. Cek tab Setelan.")
         }
 
-        // Putaran 1
+        // Putaran 1: tiap aplikasi dapat jatah waktu tetap (jeda 1)
         phase = "Putaran 1"
         addLog("Mulai putaran 1 (${pkgs.size} aplikasi)")
         for (pkg in pkgs) {
@@ -287,26 +338,44 @@ class RunnerService : Service() {
                 addLog("Target $target server tercapai, sisa aplikasi dilewati")
                 break
             }
+            val t0 = android.os.SystemClock.uptimeMillis()
             if (!launch(pkg)) {
                 addLog("Gagal buka $pkg")
                 done++
                 continue
             }
             addLog("Buka $pkg")
-            sleepMs(d1)
-            val s = readServer()
+            val deadline = t0 + d1
+            val s = readUntil(t0, d1, deadline)
+            // Walau sudah terbaca, tetap tunggu sampai jatah habis
+            sleepUntil(deadline)
+
+            var cleaned = false
             if (s == null) {
                 addLog("Server tidak terbaca, bersihkan $pkg")
-                dismiss(pkg)
+                cleaned = true
             } else if (map.containsKey(s)) {
                 addLog("Server $s sudah ada, bersihkan $pkg")
-                dismiss(pkg)
+                cleaned = true
             } else {
                 map[s] = pkg
                 found = map.size
                 setServers(map)
                 addLog("Server $s dicatat ($pkg)")
             }
+
+            if (cleaned && !stopRequested) {
+                val c0 = android.os.SystemClock.uptimeMillis()
+                dismiss(pkg)
+                val used = android.os.SystemClock.uptimeMillis() - c0
+                if (used > d3) {
+                    addLog("Pembersihan butuh $used ms, melebihi jeda tengah $d3 ms")
+                } else {
+                    sleepUntil(c0 + d3)
+                }
+            }
+            val total1 = android.os.SystemClock.uptimeMillis() - t0
+            addLog("Waktu aplikasi ini: $total1 ms")
             done++
         }
 
