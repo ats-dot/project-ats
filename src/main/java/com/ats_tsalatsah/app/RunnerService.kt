@@ -327,8 +327,8 @@ class RunnerService : Service() {
         val why = AtsAccessibilityService.lastReason
         return Pair(
             null,
-            if (why.isNotEmpty()) why
-            else if (!ok) "baca teks terlalu lama"
+            if (!ok) "baca teks terlalu lama" + (if (why.isNotEmpty()) " -> $why" else "")
+            else if (why.isNotEmpty()) why
             else "baca teks gagal tanpa alasan"
         )
     }
@@ -366,7 +366,9 @@ class RunnerService : Service() {
         val reasons = ArrayList<String>()
 
         if (ShizukuHelper.hasPermission()) {
-            val r = runLimited(waitMs) { readViaShizuku(waitMs) }
+            // Batas dalam (waitMs - 150) lebih kecil dari batas luar (waitMs),
+            // supaya alasan OCR (arah yang macet) sempat tercatat di log.
+            val r = runLimited(waitMs) { readViaShizuku(waitMs - 150L) }
             if (r.first != null) {
                 lastSource = "Shizuku"
                 lastDetail = "waktu: $shDone"
@@ -397,11 +399,11 @@ class RunnerService : Service() {
     }
 
     // Baca server di akhir jatah waktu: mulai di detik "rs" (bawaan 5000 ms),
-    // tapi paling lambat 1500 ms sebelum jatah habis.
-    // Tiap percobaan maksimal 3 detik dan tidak pernah melewati batas jatah.
+    // tapi paling lambat 2500 ms sebelum jatah habis (supaya OCR punya waktu).
+    // Tiap percobaan maksimal 4 detik dan tidak pernah melewati batas jatah.
     // Jarak antar percobaan: 400 ms (Shizuku) atau 1100 ms (aksesibilitas).
     private fun readUntil(t0: Long, rs: Long, deadline: Long): Int? {
-        sleepUntil(minOf(t0 + rs, deadline - 1500L))
+        sleepUntil(minOf(t0 + rs, deadline - 2500L))
         val startedAt = SystemClock.uptimeMillis() - t0
         var tries = 0
         val reasons = ArrayList<String>()
@@ -409,11 +411,15 @@ class RunnerService : Service() {
             val left = deadline - SystemClock.uptimeMillis()
             if (left < 500) break
             tries++
-            val res = readOnce(minOf(left - 50, 3000L))
+            val res = readOnce(minOf(left - 50, 4000L))
             if (res.first != null) {
                 val at = SystemClock.uptimeMillis() - t0
                 val d = if (lastDetail.isNotEmpty()) " [$lastDetail]" else ""
-                addLog("Baca layar OK ($lastSource), percobaan ke-$tries, selesai di $at ms$d")
+                val o = AtsAccessibilityService.lastOcrInfo
+                addLog(
+                    "Baca layar OK ($lastSource), percobaan ke-$tries, selesai di $at ms$d" +
+                        (if (o.isNotEmpty()) " (OCR $o)" else "")
+                )
                 return res.first
             }
             if (reasons.size < 3 && !reasons.contains(res.second)) reasons.add(res.second)
