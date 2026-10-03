@@ -37,6 +37,19 @@ class MainActivity : Activity() {
         web.loadUrl("file:///android_asset/index.html")
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Nyalakan aksesibilitas otomatis (kalau Shizuku diizinkan)
+        Thread {
+            try {
+                if (ShizukuHelper.hasPermission()) {
+                    ShizukuHelper.enableAccessibility()
+                }
+            } catch (e: Exception) {
+            }
+        }.start()
+    }
+
     override fun onBackPressed() {
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
     }
