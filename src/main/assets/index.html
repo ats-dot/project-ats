@@ -154,6 +154,9 @@ nav button.on{background:#fff;color:#000}
     <label>Jeda putaran 1 (jatah waktu tiap aplikasi)</label>
     <input type="number" id="d1" inputmode="numeric">
     <div class="hint" id="h1"></div>
+    <label>Mulai baca layar (dihitung dari aplikasi dibuka)</label>
+    <input type="number" id="rs" inputmode="numeric">
+    <div class="hint" id="h4"></div>
     <label>Jeda putaran 2</label>
     <input type="number" id="d2" inputmode="numeric">
     <div class="hint" id="h2"></div>
@@ -185,7 +188,7 @@ nav button.on{background:#fff;color:#000}
 var $=function(id){return document.getElementById(id)};
 var A=window.App;
 var apps=[], sel={}, shown=[], openArc={};
-var S={d1:"7450",d2:"6500",d3:"600",target:"0",back:false,qf:""};
+var S={d1:"7450",d2:"6500",d3:"600",rs:"5000",target:"0",back:false,qf:""};
 var lastLogKey="";
 var MARK="===== Sesi baru";
 var MON=["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
@@ -202,12 +205,13 @@ function load(){
     }
   }catch(e){}
   if(!S.d3)S.d3="600";
-  $("d1").value=S.d1;$("d2").value=S.d2;$("d3").value=S.d3;$("target").value=S.target;
+  if(!S.rs)S.rs="5000";
+  $("d1").value=S.d1;$("d2").value=S.d2;$("d3").value=S.d3;$("rs").value=S.rs;$("target").value=S.target;
   $("back").checked=!!S.back;$("qf").value=S.qf;
   hints();
 }
 function saveSet(){
-  S.d1=$("d1").value;S.d2=$("d2").value;S.d3=$("d3").value;S.target=$("target").value;
+  S.d1=$("d1").value;S.d2=$("d2").value;S.d3=$("d3").value;S.rs=$("rs").value;S.target=$("target").value;
   S.back=$("back").checked;S.qf=$("qf").value;
   try{localStorage.setItem("ats_set",JSON.stringify(S))}catch(e){}
   hints();
@@ -227,8 +231,12 @@ function hints(){
   $("h1").innerHTML=hintText($("d1").value);
   $("h2").innerHTML=hintText($("d2").value);
   $("h3").innerHTML=hintText($("d3").value);
+  var h4=hintText($("rs").value);
+  var a=Number($("rs").value),b=Number($("d1").value);
+  if(!isNaN(a)&&!isNaN(b)&&a>b-1500)h4+='<br><b>Catatan:</b> terlalu dekat dengan akhir jeda 1, akan dimajukan otomatis.';
+  $("h4").innerHTML=h4;
 }
-["d1","d2","d3","target","qf"].forEach(function(id){$(id).addEventListener("input",saveSet)});
+["d1","d2","d3","rs","target","qf"].forEach(function(id){$(id).addEventListener("input",saveSet)});
 $("back").addEventListener("change",saveSet);
 
 $("bminus").onclick=function(){var n=parseInt($("target").value||"0",10)||0;$("target").value=Math.max(0,n-1);saveSet()};
@@ -272,7 +280,7 @@ $("bstart").onclick=function(){
   var p=apps.filter(function(a){return sel[a.pkg]}).map(function(a){return a.pkg});
   if(!p.length){alert("Centang aplikasi dulu di tab Apps.");return}
   saveSet();
-  try{A.start(JSON.stringify(p),S.d1||"7450",S.d2||"6500",S.d3||"600",S.target||"0",!!S.back)}catch(e){}
+  try{A.start(JSON.stringify(p),S.d1||"7450",S.d2||"6500",S.d3||"600",S.rs||"5000",S.target||"0",!!S.back)}catch(e){}
 };
 $("bstop").onclick=function(){try{A.stop()}catch(e){}};
 $("bov").onclick=function(){try{A.overlay()}catch(e){}};
@@ -291,7 +299,6 @@ $("bdel").onclick=function(){
   $("arc").innerHTML='<div class="card">Belum ada arsip.</div>';
 };
 
-// Sub-tab Aktivitas
 function sub(n){
   $("vlog").style.display=n==0?"block":"none";
   $("varc").style.display=n==1?"block":"none";
@@ -301,7 +308,6 @@ function sub(n){
 $("sub0").onclick=function(){sub(0)};
 $("sub1").onclick=function(){sub(1)};
 
-// Pecah log jadi sesi
 function parseSessions(lines){
   var ses=[],cur=null;
   lines.forEach(function(l){
@@ -342,13 +348,11 @@ function renderLog(lines){
   lastLogKey=key;
   var ses=parseSessions(lines);
   var n=ses.length;
-  // Sesi terakhir
   var last=ses[n-1];
   var d=dateOf(last.head);
   var title="Sesi "+n+' <small>('+esc(d||timeOf(last.head)||"tanggal tidak tercatat")+')</small>';
   var body=last.rows.slice().reverse().map(esc).join("\n");
   $("log").innerHTML='<div class="ses"><h3>'+title+'</h3><div>'+(body||"(kosong)")+'</div></div>';
-  // Arsip: sesi sebelumnya
   var h="";
   for(var i=n-2;i>=0;i--){
     var s=ses[i];
