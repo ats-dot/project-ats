@@ -142,7 +142,13 @@ class RunnerService : Service() {
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var stopRequested = false
     @Volatile private var lastSource = ""
+    @Volatile private var lastDetail = ""
     @Volatile private var lastUsedAccess = false
+
+    // Catatan waktu langkah baca layar lewat Shizuku (untuk log)
+    @Volatile private var shDone = ""
+    @Volatile private var shNow = ""
+
     private var capsule: TextView? = null
 
     override fun onCreate() {
@@ -207,19 +213,19 @@ class RunnerService : Service() {
         }
     }
 
-    private fun sleepMs(ms: Long) {
-        var left = ms
-        while (left > 0 && !stopRequested) {
-            val s = if (left > 50) 50L else left
-            Thread.sleep(s)
-            left -= s
+    // Tunggu sampai jam tertentu (uptime). Dihitung dari jam sungguhan,
+    // bukan dari jumlah potongan tunggu, supaya tidak melenceng
+    // saat HP sibuk.
+    private fun sleepUntil(t: Long) {
+        while (!stopRequested) {
+            val left = t - SystemClock.uptimeMillis()
+            if (left <= 0) break
+            Thread.sleep(if (left > 50) 50L else left)
         }
     }
 
-    // Tunggu sampai jam tertentu (uptime), supaya waktu per aplikasi tetap
-    private fun sleepUntil(t: Long) {
-        val left = t - SystemClock.uptimeMillis()
-        if (left > 0) sleepMs(left)
+    private fun sleepMs(ms: Long) {
+        sleepUntil(SystemClock.uptimeMillis() + ms)
     }
 
     private fun launch(pkg: String): Boolean {
@@ -265,23 +271,45 @@ class RunnerService : Service() {
 
     // Jalur utama: cek aplikasi di layar depan lewat Shizuku (harus aplikasi
     // yang dicentang), potret layar lewat Shizuku, lalu baca teksnya (OCR).
+    // Waktu tiap langkah dicatat di shDone / shNow.
     private fun readViaShizuku(budget: Long): Pair<Int?, String> {
+        shDone = ""
+        shNow = "cek layar depan"
         val t0 = SystemClock.uptimeMillis()
         val fg = ShizukuHelper.foregroundPackage()
+        val tFg = SystemClock.uptimeMillis() - t0
+        shDone = "cek layar depan $tFg ms"
+        shNow = ""
         val pkg = fg.first ?: return Pair(null, fg.second)
         if (pkg !in AtsAccessibilityService.allowed) {
             return Pair(null, "layar depan '$pkg' bukan aplikasi yang dicentang")
         }
+
+        shNow = "potret layar"
+        val c0 = SystemClock.uptimeMillis()
         val cap = ShizukuHelper.captureScreen()
-        val bmp = cap.first ?: return Pair(null, cap.second)
+        val tCap = SystemClock.uptimeMillis() - c0
+        shNow = ""
+        val bmp = cap.first
+        if (bmp == null) {
+            shDone += ", potret gagal $tCap ms"
+            return Pair(null, cap.second)
+        }
+        val w = bmp.width
+        val h = bmp.height
+        shDone += ", potret $tCap ms (${w}x$h)"
+
         val left = budget - (SystemClock.uptimeMillis() - t0)
         if (left < 300) {
             try {
                 bmp.recycle()
             } catch (e: Throwable) {
             }
-            return Pair(null, "waktu habis sebelum OCR")
+            return Pair(null, "waktu habis sebelum baca teks")
         }
+
+        shNow = "baca teks (OCR)"
+        val o0 = SystemClock.uptimeMillis()
         val latch = CountDownLatch(1)
         var r: Int? = null
         AtsAccessibilityService.lastReason = ""
@@ -290,13 +318,18 @@ class RunnerService : Service() {
             latch.countDown()
         }
         val ok = latch.await(left, TimeUnit.MILLISECONDS)
+        if (ok) {
+            val tOcr = SystemClock.uptimeMillis() - o0
+            shNow = ""
+            shDone += ", baca teks $tOcr ms"
+        }
         if (r != null) return Pair(r, "")
         val why = AtsAccessibilityService.lastReason
         return Pair(
             null,
             if (why.isNotEmpty()) why
-            else if (!ok) "OCR terlalu lama"
-            else "OCR gagal tanpa alasan"
+            else if (!ok) "baca teks terlalu lama"
+            else "baca teks gagal tanpa alasan"
         )
     }
 
@@ -329,15 +362,19 @@ class RunnerService : Service() {
     private fun readOnce(waitMs: Long): Pair<Int?, String> {
         val start = SystemClock.uptimeMillis()
         lastUsedAccess = false
+        lastDetail = ""
         val reasons = ArrayList<String>()
 
         if (ShizukuHelper.hasPermission()) {
             val r = runLimited(waitMs) { readViaShizuku(waitMs) }
             if (r.first != null) {
                 lastSource = "Shizuku"
+                lastDetail = "waktu: $shDone"
                 return r
             }
-            reasons.add("Shizuku: " + r.second)
+            val trace = "waktu: " + (if (shDone.isEmpty()) "-" else shDone) +
+                (if (shNow.isNotEmpty()) ", macet di: $shNow" else "")
+            reasons.add("Shizuku: " + r.second + " [" + trace + "]")
         } else {
             reasons.add("Shizuku: belum diizinkan")
         }
@@ -375,7 +412,8 @@ class RunnerService : Service() {
             val res = readOnce(minOf(left - 50, 3000L))
             if (res.first != null) {
                 val at = SystemClock.uptimeMillis() - t0
-                addLog("Baca layar OK ($lastSource), percobaan ke-$tries, selesai di $at ms")
+                val d = if (lastDetail.isNotEmpty()) " [$lastDetail]" else ""
+                addLog("Baca layar OK ($lastSource), percobaan ke-$tries, selesai di $at ms$d")
                 return res.first
             }
             if (reasons.size < 3 && !reasons.contains(res.second)) reasons.add(res.second)
