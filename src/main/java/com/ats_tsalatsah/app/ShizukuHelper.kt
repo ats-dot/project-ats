@@ -44,8 +44,9 @@ object ShizukuHelper {
         }
     }
 
-    // Jalankan perintah lewat Shizuku. Hasil: (kode keluar, teks keluaran)
-    private fun run(cmd: Array<String>): Pair<Int, String> {
+    // Jalankan perintah lewat Shizuku.
+    // Hasil: (kode keluar, keluaran biasa, keluaran error)
+    private fun run(cmd: Array<String>): Triple<Int, String, String> {
         val m = Shizuku::class.java.getDeclaredMethod(
             "newProcess",
             Array<String>::class.java,
@@ -54,9 +55,18 @@ object ShizukuHelper {
         )
         m.isAccessible = true
         val p = m.invoke(null, cmd, null as Array<String>?, null as String?) as Process
+        var err = ""
+        val t = Thread {
+            try {
+                err = p.errorStream.bufferedReader().readText()
+            } catch (e: Throwable) {
+            }
+        }
+        t.start()
         val out = p.inputStream.bufferedReader().readText()
         val code = p.waitFor()
-        return Pair(code, out.trim())
+        t.join(1000)
+        return Triple(code, out.trim(), err.trim())
     }
 
     // Force stop satu aplikasi, tanpa animasi. Hanya untuk aplikasi yang dicentang.
@@ -128,19 +138,46 @@ object ShizukuHelper {
         }
     }
 
-    // Nyalakan layanan Aksesibilitas Project ats lewat Shizuku
-    fun enableAccessibility(): Boolean {
-        if (!hasPermission()) return false
+    private fun short(s: String): String {
+        val t = s.replace("\n", " ").trim()
+        if (t.isEmpty()) return "(kosong)"
+        return if (t.length > 160) t.substring(0, 160) + "..." else t
+    }
+
+    // Nyalakan layanan Aksesibilitas Project ats lewat Shizuku.
+    // Hasil: (berhasil, laporan lengkap untuk log)
+    fun enableAccessibility(): Pair<Boolean, String> {
+        if (!hasPermission()) return Pair(false, "Shizuku belum diizinkan")
         return try {
-            val cur = run(arrayOf("settings", "get", "secure", "enabled_accessibility_services")).second
+            val rep = StringBuilder()
+            val before = run(arrayOf("settings", "get", "secure", "enabled_accessibility_services"))
+            val cur = before.second
+            rep.append("sebelum=[").append(short(cur)).append("]")
+            if (before.third.isNotEmpty()) rep.append(" err=[").append(short(before.third)).append("]")
+
             if (!cur.contains(SERVICE)) {
                 val v = if (cur.isBlank() || cur == "null") SERVICE else "$cur:$SERVICE"
-                run(arrayOf("settings", "put", "secure", "enabled_accessibility_services", v))
+                val r1 = run(arrayOf("settings", "put", "secure", "enabled_accessibility_services", v))
+                rep.append(" | put layanan kode=").append(r1.first)
+                if (r1.third.isNotEmpty()) rep.append(" err=[").append(short(r1.third)).append("]")
+            } else {
+                rep.append(" | layanan sudah terdaftar")
             }
-            run(arrayOf("settings", "put", "secure", "accessibility_enabled", "1"))
-            true
+
+            val r2 = run(arrayOf("settings", "put", "secure", "accessibility_enabled", "1"))
+            rep.append(" | put aktif kode=").append(r2.first)
+            if (r2.third.isNotEmpty()) rep.append(" err=[").append(short(r2.third)).append("]")
+
+            val after = run(arrayOf("settings", "get", "secure", "enabled_accessibility_services"))
+            val flag = run(arrayOf("settings", "get", "secure", "accessibility_enabled"))
+            rep.append(" | sesudah=[").append(short(after.second)).append("]")
+            rep.append(" aktif=[").append(short(flag.second)).append("]")
+
+            val ok = after.second.contains(SERVICE) && flag.second.trim() == "1"
+            Pair(ok, rep.toString())
         } catch (e: Throwable) {
-            false
+            val root = e.cause ?: e
+            Pair(false, "error: ${root.javaClass.simpleName} ${root.message ?: ""}")
         }
     }
 }
