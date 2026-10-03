@@ -144,6 +144,7 @@ class RunnerService : Service() {
     @Volatile private var lastSource = ""
     @Volatile private var lastDetail = ""
     @Volatile private var lastUsedAccess = false
+    @Volatile private var debugSaved = false
 
     // Catatan waktu langkah baca layar lewat Shizuku (untuk log)
     @Volatile private var shDone = ""
@@ -213,9 +214,7 @@ class RunnerService : Service() {
         }
     }
 
-    // Tunggu sampai jam tertentu (uptime). Dihitung dari jam sungguhan,
-    // bukan dari jumlah potongan tunggu, supaya tidak melenceng
-    // saat HP sibuk.
+    // Tunggu sampai jam tertentu (uptime), dihitung dari jam sungguhan
     private fun sleepUntil(t: Long) {
         while (!stopRequested) {
             val left = t - SystemClock.uptimeMillis()
@@ -250,8 +249,7 @@ class RunnerService : Service() {
         }
     }
 
-    // Jalankan pekerjaan di thread terpisah dengan batas waktu,
-    // supaya tidak pernah menggantung dan jatah waktu tetap seragam.
+    // Jalankan pekerjaan di thread terpisah dengan batas waktu
     private fun runLimited(limit: Long, job: () -> Pair<Int?, String>): Pair<Int?, String> {
         val latch = CountDownLatch(1)
         var res: Pair<Int?, String>? = null
@@ -271,7 +269,6 @@ class RunnerService : Service() {
 
     // Jalur utama: cek aplikasi di layar depan lewat Shizuku (harus aplikasi
     // yang dicentang), potret layar lewat Shizuku, lalu baca teksnya (OCR).
-    // Waktu tiap langkah dicatat di shDone / shNow.
     private fun readViaShizuku(budget: Long): Pair<Int?, String> {
         shDone = ""
         shNow = "cek layar depan"
@@ -295,9 +292,7 @@ class RunnerService : Service() {
             shDone += ", potret gagal $tCap ms"
             return Pair(null, cap.second)
         }
-        val w = bmp.width
-        val h = bmp.height
-        shDone += ", potret $tCap ms (${w}x$h)"
+        shDone += ", potret $tCap ms (${bmp.width}x${bmp.height})"
 
         val left = budget - (SystemClock.uptimeMillis() - t0)
         if (left < 300) {
@@ -358,7 +353,6 @@ class RunnerService : Service() {
     }
 
     // Satu kali baca: Shizuku dulu, kalau gagal baru aksesibilitas.
-    // Tidak pernah lebih lama dari waitMs.
     private fun readOnce(waitMs: Long): Pair<Int?, String> {
         val start = SystemClock.uptimeMillis()
         lastUsedAccess = false
@@ -366,8 +360,6 @@ class RunnerService : Service() {
         val reasons = ArrayList<String>()
 
         if (ShizukuHelper.hasPermission()) {
-            // Batas dalam (waitMs - 150) lebih kecil dari batas luar (waitMs),
-            // supaya alasan OCR (arah yang macet) sempat tercatat di log.
             val r = runLimited(waitMs) { readViaShizuku(waitMs - 150L) }
             if (r.first != null) {
                 lastSource = "Shizuku"
@@ -398,12 +390,29 @@ class RunnerService : Service() {
         return Pair(null, reasons.joinToString(" | "))
     }
 
-    // Baca server di akhir jatah waktu: mulai di detik "rs" (bawaan 5000 ms),
-    // tapi paling lambat 2500 ms sebelum jatah habis (supaya OCR punya waktu).
-    // Tiap percobaan maksimal 4 detik dan tidak pernah melewati batas jatah.
-    // Jarak antar percobaan: 400 ms (Shizuku) atau 1100 ms (aksesibilitas).
+    // Simpan satu foto layar ke Download (sekali per sesi, hanya kalau
+    // yang di layar depan adalah aplikasi yang dicentang).
+    private fun saveShotOnce() {
+        if (debugSaved) return
+        debugSaved = true
+        try {
+            val fg = ShizukuHelper.foregroundPackage().first
+            if (fg == null || fg !in AtsAccessibilityService.allowed) {
+                addLog("Foto layar tidak disimpan: layar depan bukan aplikasi yang dicentang")
+                return
+            }
+            val r = ShizukuHelper.saveDebugShot("ats_debug.png")
+            addLog("Foto layar pemeriksaan ($fg): " + (if (r.first) "OK, " else "GAGAL, ") + r.second)
+        } catch (e: Throwable) {
+            addLog("Foto layar error: " + (e.message ?: "?"))
+        }
+    }
+
+    // Baca server di akhir jatah waktu: mulai di "rs" (paling lambat 1500 ms
+    // sebelum jatah habis). Diulang rapat (jarak 400 ms lewat Shizuku).
+    // Begitu ketemu, berhenti membaca. Sisa jatah tetap ditunggu di pemanggil.
     private fun readUntil(t0: Long, rs: Long, deadline: Long): Int? {
-        sleepUntil(minOf(t0 + rs, deadline - 2500L))
+        sleepUntil(minOf(t0 + rs, deadline - 1500L))
         val startedAt = SystemClock.uptimeMillis() - t0
         var tries = 0
         val reasons = ArrayList<String>()
@@ -429,6 +438,7 @@ class RunnerService : Service() {
         }
         addLog("Baca layar: $tries percobaan (mulai di $startedAt ms), tidak ketemu")
         for (r in reasons) addLog("  alasan: $r")
+        saveShotOnce()
         return null
     }
 
@@ -471,6 +481,7 @@ class RunnerService : Service() {
         done = 0
         found = 0
         total = pkgs.size
+        debugSaved = false
         val map = LinkedHashMap<Int, String>()
         setServers(map)
 
