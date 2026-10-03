@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Project ats</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:#000;color:#fff;font-family:sans-serif}
+body{padding:14px 14px 100px}
+header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+header svg{width:34px;height:34px}
+header h1{font-size:20px;margin:0}
+.tab{display:none}.tab.on{display:block}
+.card{background:#111;border:1px solid #2a2a2a;border-radius:20px;padding:16px;margin-bottom:12px}
+.card h2{margin:0 0 10px;font-size:15px;color:#bbb;font-weight:600}
+.btn{border:0;border-radius:999px;padding:12px 20px;font-size:15px;font-weight:600;background:#fff;color:#000}
+.btn.o{background:transparent;color:#fff;border:1px solid #555}
+.btn.sm{padding:8px 14px;font-size:13px}
+.btn:active{opacity:.6}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input[type=text],input[type=number]{width:100%;background:#000;color:#fff;border:1px solid #444;border-radius:14px;padding:11px 14px;font-size:15px}
+label{display:block;font-size:13px;color:#aaa;margin:10px 0 4px}
+.big{font-size:38px;font-weight:700}
+.bar{height:8px;background:#2a2a2a;border-radius:99px;overflow:hidden;margin-top:10px}
+.bar i{display:block;height:100%;width:0;background:#fff;transition:width .3s}
+.app{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #222}
+.app:last-child{border:0}
+.app input{width:22px;height:22px;accent-color:#fff;flex:none}
+.app b{display:block;font-size:14px}
+.app small{color:#888;font-size:11px;word-break:break-all}
+#log{font-family:monospace;font-size:12px;line-height:1.6;color:#ccc;white-space:pre-wrap;word-break:break-all}
+.st{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#555;margin-right:6px}
+.dot.ok{background:#fff}
+nav{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;width:calc(100% - 32px);max-width:420px;background:#161616;border:1px solid #333;border-radius:999px;display:flex;padding:6px}
+nav button{flex:1;background:none;border:0;color:#888;padding:11px 0;border-radius:999px;font-size:13px;font-weight:600}
+nav button.on{background:#fff;color:#000}
+</style>
+</head>
+<body>
+
+<header>
+  <svg viewBox="0 0 512 512"><path fill="#fff" d="M231.0,241.5 L149.0,241.5 L128.5,217.0 L183.0,145.5 L329.0,145.5 L374.5,205.0 L345.0,205.5 L317.0,169.5 L196.0,168.5 L158.5,217.0 L231.0,217.5 L231.0,241.5 Z M256.0,367.5 L160.5,254.0 L190.0,253.5 L256.0,330.5 L330.5,242.0 L269.0,239.5 L252.5,228.0 L243.0,205.5 L184.0,205.5 L199.5,183.0 L311.0,181.5 L328.0,205.5 L276.0,205.5 L272.5,209.0 L273.5,215.0 L277.0,217.5 L382.0,217.5 L256.0,367.5 Z M256.0,311.5 L228.5,279.0 L243.5,285.0 L244.0,224.5 L256.0,238.5 L267.5,245.0 L267.5,285.0 L283.5,279.0 L256.0,311.5 Z"/></svg>
+  <h1>Project ats</h1>
+</header>
+
+<!-- TAB CABANG -->
+<section class="tab on" id="t0">
+  <div class="card">
+    <h2>Status</h2>
+    <div class="big" id="prog">0/0</div>
+    <div id="phase" style="color:#aaa;margin-top:4px">Siap</div>
+    <div class="bar"><i id="barfill"></i></div>
+    <div style="margin-top:10px">Server didapat: <b id="found">0</b></div>
+  </div>
+  <div class="card">
+    <h2>Target</h2>
+    <label>Jumlah server yang diinginkan (0 = tanpa target)</label>
+    <input type="number" id="target" inputmode="numeric">
+    <div class="row" style="margin-top:14px">
+      <button class="btn" id="bstart">Mulai</button>
+      <button class="btn o" id="bstop">Hentikan</button>
+    </div>
+    <div style="margin-top:10px;color:#888;font-size:13px">Dipilih: <span id="sel">0</span> aplikasi</div>
+  </div>
+</section>
+
+<!-- TAB APPS -->
+<section class="tab" id="t1">
+  <div class="card">
+    <input type="text" id="q" placeholder="Cari nama atau paket...">
+    <div class="row" style="margin-top:10px">
+      <button class="btn sm" id="bpick">Pilih hasil</button>
+      <button class="btn sm o" id="bclear">Kosongkan</button>
+    </div>
+    <label>Filter cepat (nama bisa diubah)</label>
+    <div class="row" style="flex-wrap:nowrap">
+      <input type="text" id="qf" placeholder="contoh: Mobile Legends">
+      <button class="btn sm" id="bqf">Pilih</button>
+    </div>
+  </div>
+  <div class="card" id="list">Memuat...</div>
+</section>
+
+<!-- TAB AKTIVITAS -->
+<section class="tab" id="t2">
+  <div class="card">
+    <h2>Log aktivitas</h2>
+    <div id="log">Belum ada aktivitas.</div>
+  </div>
+</section>
+
+<!-- TAB SETELAN -->
+<section class="tab" id="t3">
+  <div class="card">
+    <h2>Jeda (milidetik, 1000 = 1 detik)</h2>
+    <label>Jeda putaran 1</label>
+    <input type="number" id="d1" inputmode="numeric">
+    <label>Jeda putaran 2</label>
+    <input type="number" id="d2" inputmode="numeric">
+    <label style="display:flex;align-items:center;gap:10px;color:#fff;margin-top:16px">
+      <input type="checkbox" id="back" style="width:22px;height:22px;accent-color:#fff"> Kembali ke aplikasi ini setelah selesai
+    </label>
+  </div>
+  <div class="card">
+    <h2>Izin</h2>
+    <div class="st"><span><span class="dot" id="d_ov"></span>Tampil di atas aplikasi lain</span><button class="btn sm" id="bov">Atur</button></div>
+    <div class="st"><span><span class="dot" id="d_ac"></span>Aksesibilitas (baca layar)</span><button class="btn sm" id="bac">Atur</button></div>
+    <div class="st"><span>Penghemat baterai</span><button class="btn sm o" id="bba">Atur</button></div>
+    <div style="color:#888;font-size:12px;margin-top:8px">Pembacaan layar hanya berlaku untuk aplikasi yang kamu centang.</div>
+  </div>
+</section>
+
+<nav>
+  <button class="on" data-t="0">Cabang</button>
+  <button data-t="1">Apps</button>
+  <button data-t="2">Aktivitas</button>
+  <button data-t="3">Setelan</button>
+</nav>
+
+<script>
+var $=function(id){return document.getElementById(id)};
+var A=window.App;
+var apps=[], sel={}, shown=[];
+var S={d1:"7450",d2:"6500",target:"0",back:false,qf:""};
+
+function load(){
+  try{
+    var s=JSON.parse(localStorage.getItem("ats_set")||"{}");
+    for(var k in s)S[k]=s[k];
+    sel=JSON.parse(localStorage.getItem("ats_sel")||"{}");
+  }catch(e){}
+  $("d1").value=S.d1;$("d2").value=S.d2;$("target").value=S.target;
+  $("back").checked=!!S.back;$("qf").value=S.qf;
+}
+function saveSet(){
+  S.d1=$("d1").value;S.d2=$("d2").value;S.target=$("target").value;
+  S.back=$("back").checked;S.qf=$("qf").value;
+  localStorage.setItem("ats_set",JSON.stringify(S));
+}
+function saveSel(){
+  localStorage.setItem("ats_sel",JSON.stringify(sel));
+  $("sel").textContent=Object.keys(sel).length;
+}
+["d1","d2","target","qf"].forEach(function(id){$(id).addEventListener("input",saveSet)});
+$("back").addEventListener("change",saveSet);
+
+function esc(t){return String(t).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
+
+function render(){
+  var q=$("q").value.toLowerCase();
+  shown=apps.filter(function(a){return !q||a.name.toLowerCase().indexOf(q)>-1||a.pkg.toLowerCase().indexOf(q)>-1});
+  var h="";
+  shown.forEach(function(a){
+    h+='<label class="app"><input type="checkbox" data-p="'+esc(a.pkg)+'"'+(sel[a.pkg]?" checked":"")+'><span><b>'+esc(a.name)+'</b><small>'+esc(a.pkg)+'</small></span></label>';
+  });
+  $("list").innerHTML=h||"Tidak ada aplikasi.";
+  saveSel();
+}
+$("list").addEventListener("change",function(e){
+  var p=e.target.getAttribute("data-p");
+  if(!p)return;
+  if(e.target.checked)sel[p]=1;else delete sel[p];
+  saveSel();
+});
+$("q").addEventListener("input",render);
+$("bpick").onclick=function(){shown.forEach(function(a){sel[a.pkg]=1});render()};
+$("bclear").onclick=function(){sel={};render()};
+$("bqf").onclick=function(){
+  var f=$("qf").value.toLowerCase().trim();
+  if(!f)return;
+  apps.forEach(function(a){
+    if(a.name.toLowerCase().indexOf(f)>-1||a.pkg.toLowerCase().indexOf(f)>-1)sel[a.pkg]=1;
+  });
+  render();
+};
+
+function loadApps(){
+  try{apps=JSON.parse(A.apps())}catch(e){apps=[]}
+  render();
+}
+
+$("bstart").onclick=function(){
+  var p=apps.filter(function(a){return sel[a.pkg]}).map(function(a){return a.pkg});
+  if(!p.length){alert("Centang aplikasi dulu di tab Apps.");return}
+  saveSet();
+  try{A.start(JSON.stringify(p),S.d1||"7450",S.d2||"6500",S.target||"0",!!S.back)}catch(e){}
+};
+$("bstop").onclick=function(){try{A.stop()}catch(e){}};
+$("bov").onclick=function(){try{A.overlay()}catch(e){}};
+$("bac").onclick=function(){try{A.access()}catch(e){}};
+$("bba").onclick=function(){try{A.battery()}catch(e){}};
+
+function poll(){
+  var s;
+  try{s=JSON.parse(A.status())}catch(e){return}
+  $("prog").textContent=s.done+"/"+s.total;
+  $("phase").textContent=s.phase;
+  $("found").textContent=s.found;
+  $("barfill").style.width=(s.total?Math.round(s.done*100/s.total):0)+"%";
+  $("d_ov").className="dot"+(s.overlay?" ok":"");
+  $("d_ac").className="dot"+(s.access?" ok":"");
+  if(s.logs&&s.logs.length){
+    var el=$("log");
+    el.textContent=s.logs.slice().reverse().join("\n");
+  }
+}
+
+document.querySelectorAll("nav button").forEach(function(b){
+  b.onclick=function(){
+    document.querySelectorAll("nav button").forEach(function(x){x.classList.remove("on")});
+    document.querySelectorAll(".tab").forEach(function(x){x.classList.remove("on")});
+    b.classList.add("on");
+    $("t"+b.getAttribute("data-t")).classList.add("on");
+  };
+});
+
+load();
+loadApps();
+poll();
+setInterval(poll,700);
+</script>
+</body>
+</html>
