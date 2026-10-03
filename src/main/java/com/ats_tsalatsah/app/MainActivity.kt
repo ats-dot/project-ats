@@ -39,11 +39,15 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        // Nyalakan aksesibilitas otomatis (kalau Shizuku diizinkan)
+        // Nyalakan aksesibilitas otomatis (kalau Shizuku diizinkan), hasilnya dicatat di log
         Thread {
             try {
-                if (ShizukuHelper.hasPermission()) {
-                    ShizukuHelper.enableAccessibility()
+                if (ShizukuHelper.hasPermission() && !AtsAccessibilityService.isReady()) {
+                    val rep = ShizukuHelper.enableAccessibility()
+                    RunnerService.addLog(
+                        "Buka app, nyalakan aksesibilitas " +
+                            (if (rep.first) "OK: " else "GAGAL: ") + rep.second
+                    )
                 }
             } catch (e: Exception) {
             }
@@ -86,15 +90,16 @@ class MainActivity : Activity() {
             return arr.toString()
         }
 
-        // pkgsJson = ["com.a","com.b"], d1 & d2 dalam milidetik
+        // pkgsJson = ["com.a","com.b"], d1, d2, d3 dalam milidetik
         @JavascriptInterface
-        fun start(pkgsJson: String, d1: String, d2: String, target: String, back: Boolean) {
+        fun start(pkgsJson: String, d1: String, d2: String, d3: String, target: String, back: Boolean) {
             val arr = JSONArray(pkgsJson)
             val pkgs = Array(arr.length()) { arr.getString(it) }
             val i = Intent(this@MainActivity, RunnerService::class.java)
             i.putExtra("pkgs", pkgs)
             i.putExtra("d1", d1.toLongOrNull() ?: 7450L)
             i.putExtra("d2", d2.toLongOrNull() ?: 6500L)
+            i.putExtra("d3", d3.toLongOrNull() ?: 600L)
             i.putExtra("target", target.toIntOrNull() ?: 0)
             i.putExtra("back", back)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
