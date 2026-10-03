@@ -29,7 +29,7 @@ label{display:block;font-size:13px;color:#aaa;margin:10px 0 4px}
 .app input{width:22px;height:22px;accent-color:#fff;flex:none}
 .app b{display:block;font-size:14px}
 .app small{color:#888;font-size:11px;word-break:break-all}
-#log{font-family:monospace;font-size:12px;line-height:1.6;color:#ccc;white-space:pre-wrap;word-break:break-all}
+#log,#srv{font-family:monospace;font-size:12px;line-height:1.6;color:#ccc;white-space:pre-wrap;word-break:break-all}
 .st{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#555;margin-right:6px}
 .dot.ok{background:#fff}
@@ -86,7 +86,14 @@ nav button.on{background:#fff;color:#000}
 <!-- TAB AKTIVITAS -->
 <section class="tab" id="t2">
   <div class="card">
-    <h2>Log aktivitas</h2>
+    <h2>Server didapat (<span id="scount">0</span>)</h2>
+    <div id="srv">Belum ada server.</div>
+  </div>
+  <div class="card">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h2 style="margin:0">Log aktivitas</h2>
+      <button class="btn sm o" id="bdel">Hapus</button>
+    </div>
     <div id="log">Belum ada aktivitas.</div>
   </div>
 </section>
@@ -107,8 +114,9 @@ nav button.on{background:#fff;color:#000}
     <h2>Izin</h2>
     <div class="st"><span><span class="dot" id="d_ov"></span>Tampil di atas aplikasi lain</span><button class="btn sm" id="bov">Atur</button></div>
     <div class="st"><span><span class="dot" id="d_ac"></span>Aksesibilitas (baca layar)</span><button class="btn sm" id="bac">Atur</button></div>
+    <div class="st"><span><span class="dot" id="d_sz"></span>Shizuku (force stop)</span><button class="btn sm" id="bsz">Atur</button></div>
     <div class="st"><span>Penghemat baterai</span><button class="btn sm o" id="bba">Atur</button></div>
-    <div style="color:#888;font-size:12px;margin-top:8px">Pembacaan layar hanya berlaku untuk aplikasi yang kamu centang.</div>
+    <div style="color:#888;font-size:12px;margin-top:8px">Pembacaan layar dan force stop hanya berlaku untuk aplikasi yang kamu centang.</div>
   </div>
 </section>
 
@@ -191,6 +199,16 @@ $("bstop").onclick=function(){try{A.stop()}catch(e){}};
 $("bov").onclick=function(){try{A.overlay()}catch(e){}};
 $("bac").onclick=function(){try{A.access()}catch(e){}};
 $("bba").onclick=function(){try{A.battery()}catch(e){}};
+$("bsz").onclick=function(){try{A.shizuku()}catch(e){}};
+$("bdel").onclick=function(){
+  if(!confirm("Hapus semua log dan daftar server?"))return;
+  var ok=true;
+  try{ok=A.clearLogs()}catch(e){}
+  if(!ok){alert("Tidak bisa dihapus saat sedang berjalan. Hentikan dulu.");return}
+  $("log").textContent="Belum ada aktivitas.";
+  $("srv").textContent="Belum ada server.";
+  $("scount").textContent="0";
+};
 
 function poll(){
   var s;
@@ -201,9 +219,13 @@ function poll(){
   $("barfill").style.width=(s.total?Math.round(s.done*100/s.total):0)+"%";
   $("d_ov").className="dot"+(s.overlay?" ok":"");
   $("d_ac").className="dot"+(s.access?" ok":"");
+  $("d_sz").className="dot"+(s.shizuku?" ok":"");
   if(s.logs&&s.logs.length){
-    var el=$("log");
-    el.textContent=s.logs.slice().reverse().join("\n");
+    $("log").textContent=s.logs.slice().reverse().join("\n");
+  }
+  if(s.servers&&s.servers.length){
+    $("srv").textContent=s.servers.join("\n");
+    $("scount").textContent=s.servers.length;
   }
 }
 
