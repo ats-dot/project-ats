@@ -18,14 +18,21 @@ class AtsAccessibilityService : AccessibilityService() {
         @Volatile var allowed: Set<String> = emptySet()
         @Volatile var lastPackage: String = ""
 
-        // Alasan kegagalan baca terakhir, dibaca RunnerService untuk log
+        // Alasan kegagalan baca terakhir, dibaca RunnerService untuk log.
+        // Saat OCR masih berjalan, isinya progres (arah yang sedang dicoba).
         @Volatile var lastReason: String = ""
+
+        // Keterangan baca teks terakhir yang berhasil (arah dan lama)
+        @Volatile var lastOcrInfo: String = ""
+
+        // Arah putar yang terakhir berhasil, dicoba duluan berikutnya
+        @Volatile var bestAngle: Int = 0
 
         // Android membatasi screenshot aksesibilitas sekitar 1 per detik
         private const val MIN_GAP = 1100L
 
-        // Urutan arah putar OCR: 90 dan 270 dulu (tulisan game menyamping)
-        private val ANGLES = intArrayOf(90, 270, 0, 180)
+        // Urutan arah putar OCR. Gambar layar mendatar biasanya sudah tegak (0).
+        private val DEFAULT_ANGLES = intArrayOf(0, 90, 270, 180)
 
         // Pembaca teks. Ada di sini (bukan di layanan) supaya tetap bisa
         // dipakai walau layanan aksesibilitas sedang mati.
@@ -51,10 +58,10 @@ class AtsAccessibilityService : AccessibilityService() {
             return null
         }
 
-        private fun short(s: String): String {
+        private fun shortN(s: String, n: Int): String {
             val t = s.replace("\n", " ").trim()
             if (t.isEmpty()) return "(kosong)"
-            return if (t.length > 90) t.substring(0, 90) + "..." else t
+            return if (t.length > n) t.substring(0, n) + "..." else t
         }
 
         private fun rotate(src: Bitmap, deg: Int): Bitmap {
@@ -64,14 +71,31 @@ class AtsAccessibilityService : AccessibilityService() {
             return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
         }
 
-        // Coba OCR di 4 arah putar sampai server ketemu
-        private fun ocr(bmp: Bitmap, idx: Int, seen: StringBuilder, callback: (Int?) -> Unit) {
-            if (idx >= ANGLES.size) {
-                lastReason = "OCR jalan di 4 arah, server tidak ketemu. Teks terbaca: " + short(seen.toString())
+        // Arah yang terakhir berhasil dicoba duluan, lalu sisanya berurutan
+        private fun angleOrder(): IntArray {
+            val b = bestAngle
+            val list = ArrayList<Int>()
+            list.add(b)
+            for (a in DEFAULT_ANGLES) {
+                if (a != b) list.add(a)
+            }
+            return list.toIntArray()
+        }
+
+        // Coba OCR di beberapa arah putar sampai server ketemu.
+        // Progres dicatat di lastReason supaya kelihatan walau kena batas waktu.
+        private fun ocr(bmp: Bitmap, order: IntArray, idx: Int, seen: StringBuilder, callback: (Int?) -> Unit) {
+            if (idx >= order.size) {
+                lastReason = "OCR jalan di ${order.size} arah, server tidak ketemu. Teks terbaca:" +
+                    shortN(seen.toString(), 200)
                 callback(null)
                 return
             }
-            val deg = ANGLES[idx]
+            val deg = order[idx]
+            val t0 = SystemClock.uptimeMillis()
+            lastReason = "OCR sedang di arah $deg" +
+                (if (seen.isNotEmpty()) ", sebelumnya:" + shortN(seen.toString(), 200) else "")
+
             val rot: Bitmap
             val img: InputImage
             try {
@@ -85,13 +109,19 @@ class AtsAccessibilityService : AccessibilityService() {
             try {
                 recognizer.process(img)
                     .addOnSuccessListener {
+                        val ms = SystemClock.uptimeMillis() - t0
                         val s = pickServer(it.text)
                         if (s != null) {
+                            bestAngle = deg
+                            lastOcrInfo = "arah $deg, $ms ms"
                             lastReason = ""
                             callback(s)
                         } else {
-                            if (seen.length < 200) seen.append(" [").append(deg).append("] ").append(it.text)
-                            ocr(bmp, idx + 1, seen, callback)
+                            if (seen.length < 300) {
+                                seen.append(" [arah ").append(deg).append(", ").append(ms)
+                                    .append(" ms] ").append(shortN(it.text, 80))
+                            }
+                            ocr(bmp, order, idx + 1, seen, callback)
                         }
                     }
                     .addOnFailureListener {
@@ -116,7 +146,7 @@ class AtsAccessibilityService : AccessibilityService() {
         // Baca server dari sebuah gambar (mis. dari screencap Shizuku).
         // Gambar diambil alih dan dibebaskan sendiri setelah selesai.
         fun ocrBitmap(bmp: Bitmap, callback: (Int?) -> Unit) {
-            ocr(bmp, 0, StringBuilder()) { r ->
+            ocr(bmp, angleOrder(), 0, StringBuilder()) { r ->
                 try {
                     if (!bmp.isRecycled) bmp.recycle()
                 } catch (e: Throwable) {
