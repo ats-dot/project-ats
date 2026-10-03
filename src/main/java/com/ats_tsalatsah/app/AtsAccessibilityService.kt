@@ -23,7 +23,7 @@ class AtsAccessibilityService : AccessibilityService() {
         fun isReady(): Boolean = instance != null
 
         // Hanya aplikasi yang dicentang yang boleh dibaca
-        fun setAllowed(pkgs: Set<String>) {
+        fun updateAllowed(pkgs: Set<String>) {
             allowed = pkgs
             instance?.applyFilter()
         }
