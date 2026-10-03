@@ -3,6 +3,8 @@ package com.ats_tsalatsah.app
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.IBinder
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 import rikka.shizuku.Shizuku
@@ -44,9 +46,7 @@ object ShizukuHelper {
         }
     }
 
-    // Jalankan perintah lewat Shizuku.
-    // Hasil: (kode keluar, keluaran biasa, keluaran error)
-    private fun run(cmd: Array<String>): Triple<Int, String, String> {
+    private fun start(cmd: Array<String>): Process {
         val m = Shizuku::class.java.getDeclaredMethod(
             "newProcess",
             Array<String>::class.java,
@@ -54,7 +54,13 @@ object ShizukuHelper {
             String::class.java
         )
         m.isAccessible = true
-        val p = m.invoke(null, cmd, null as Array<String>?, null as String?) as Process
+        return m.invoke(null, cmd, null as Array<String>?, null as String?) as Process
+    }
+
+    // Jalankan perintah lewat Shizuku.
+    // Hasil: (kode keluar, keluaran biasa, keluaran error)
+    private fun run(cmd: Array<String>): Triple<Int, String, String> {
+        val p = start(cmd)
         var err = ""
         val t = Thread {
             try {
@@ -67,6 +73,65 @@ object ShizukuHelper {
         val code = p.waitFor()
         t.join(1000)
         return Triple(code, out.trim(), err.trim())
+    }
+
+    // Sama seperti run, tapi keluaran berupa byte (untuk gambar)
+    private fun runBytes(cmd: Array<String>): Triple<Int, ByteArray, String> {
+        val p = start(cmd)
+        var err = ""
+        val t = Thread {
+            try {
+                err = p.errorStream.bufferedReader().readText()
+            } catch (e: Throwable) {
+            }
+        }
+        t.start()
+        val out = p.inputStream.readBytes()
+        val code = p.waitFor()
+        t.join(1000)
+        return Triple(code, out, err.trim())
+    }
+
+    // Potret layar lewat Shizuku (tanpa aksesibilitas).
+    // Hasil: (gambar atau null, keterangan kalau gagal)
+    fun captureScreen(): Pair<Bitmap?, String> {
+        if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
+        return try {
+            val r = runBytes(arrayOf("screencap", "-p"))
+            if (r.first != 0 || r.second.isEmpty()) {
+                return Pair(null, "screencap gagal kode=${r.first} err=[${short(r.third)}]")
+            }
+            val bmp = BitmapFactory.decodeByteArray(r.second, 0, r.second.size)
+                ?: return Pair(null, "gambar screencap tidak bisa dibaca (${r.second.size} byte)")
+            Pair(bmp, "")
+        } catch (e: Throwable) {
+            val root = e.cause ?: e
+            Pair(null, "error screencap: ${root.javaClass.simpleName} ${root.message ?: ""}")
+        }
+    }
+
+    // Nama paket aplikasi yang sedang di layar depan, lewat Shizuku.
+    // Hasil: (paket atau null, keterangan kalau gagal)
+    fun foregroundPackage(): Pair<String?, String> {
+        if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
+        val cmds = arrayOf(
+            "dumpsys activity activities | grep -m1 -E 'topResumedActivity|mResumedActivity'",
+            "dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'"
+        )
+        val re = Regex("([A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+)/")
+        var last = ""
+        for (c in cmds) {
+            try {
+                val r = run(arrayOf("sh", "-c", c))
+                last = short(r.second)
+                val m = re.find(r.second)
+                if (m != null) return Pair(m.groupValues[1], "")
+            } catch (e: Throwable) {
+                val root = e.cause ?: e
+                last = "error ${root.javaClass.simpleName} ${root.message ?: ""}"
+            }
+        }
+        return Pair(null, "paket depan tidak terbaca: $last")
     }
 
     // Force stop satu aplikasi, tanpa animasi. Hanya untuk aplikasi yang dicentang.
