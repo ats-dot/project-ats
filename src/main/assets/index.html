@@ -10,34 +10,48 @@ html,body{margin:0;height:100%;background:#000;color:#fff;font-family:sans-serif
 body{padding:14px 14px 100px}
 header{display:flex;align-items:center;gap:10px;margin-bottom:14px}
 header svg{width:34px;height:34px}
-header h1{font-size:20px;margin:0}
+header h1{font-size:20px;margin:0;flex:1}
+.pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #444;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;color:#ddd;background:#0a0a0a}
 .tab{display:none}.tab.on{display:block}
-.card{background:#111;border:1px solid #2a2a2a;border-radius:20px;padding:16px;margin-bottom:12px}
+.card{background:#111;border:1px solid #2a2a2a;border-radius:24px;padding:16px;margin-bottom:12px}
 .card h2{margin:0 0 10px;font-size:15px;color:#bbb;font-weight:600}
 .btn{border:0;border-radius:999px;padding:12px 20px;font-size:15px;font-weight:600;background:#fff;color:#000}
 .btn.o{background:transparent;color:#fff;border:1px solid #555}
 .btn.sm{padding:8px 14px;font-size:13px}
+.btn.big{width:100%;padding:18px;font-size:18px;display:flex;align-items:center;justify-content:center;gap:10px}
 .btn:active{opacity:.6}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 input[type=text],input[type=number]{width:100%;background:#000;color:#fff;border:1px solid #444;border-radius:14px;padding:11px 14px;font-size:15px}
 label{display:block;font-size:13px;color:#aaa;margin:10px 0 4px}
 .hint{font-size:12px;color:#888;margin-top:6px;min-height:16px}
 .hint b{color:#fff;text-decoration:underline}
-.big{font-size:38px;font-weight:700}
-.bar{height:8px;background:#2a2a2a;border-radius:99px;overflow:hidden;margin-top:10px}
-.bar i{display:block;height:100%;width:0;background:#fff;transition:width .3s}
 .app{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #222}
 .app:last-child{border:0}
 .app input{width:22px;height:22px;accent-color:#fff;flex:none}
 .app b{display:block;font-size:14px}
 .app small{color:#888;font-size:11px;word-break:break-all}
-#log,#srv{font-family:monospace;font-size:12px;line-height:1.6;color:#ccc;white-space:pre-wrap;word-break:break-all}
+.mono{font-family:monospace;font-size:12px;line-height:1.6;color:#ccc;white-space:pre-wrap;word-break:break-all}
 .ses{border:1px solid #2a2a2a;border-radius:16px;padding:12px;margin-bottom:10px;background:#0a0a0a}
 .ses h3{margin:0 0 8px;font-size:13px;color:#fff;font-family:sans-serif}
 .ses h3 small{color:#888;font-weight:400}
+.arc{border:1px solid #2a2a2a;border-radius:18px;margin-bottom:10px;background:#0a0a0a;overflow:hidden}
+.arc .hd{padding:14px}
+.arc .hd b{display:block;font-size:15px}
+.arc .hd small{display:block;color:#888;font-size:12px;margin-top:3px}
+.arc .bd{display:none;padding:0 14px 14px}
+.arc.open .bd{display:block}
 .st{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
-.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#555;margin-right:6px}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#555}
 .dot.ok{background:#fff}
+.step{display:flex;align-items:center;justify-content:space-between;margin:6px 0 4px}
+.rb{width:52px;height:52px;border-radius:50%;border:1px solid #555;background:transparent;color:#fff;font-size:26px}
+.rb:active{opacity:.5}
+#target{width:140px;text-align:center;font-size:44px;font-weight:700;border:0;background:transparent;padding:0}
+.sub{display:flex;gap:8px;margin-bottom:12px}
+.sub button{flex:1}
+.num{flex:1;text-align:center}
+.num b{display:block;font-size:34px}
+.num small{color:#999;font-size:12px}
 nav{position:fixed;left:50%;transform:translateX(-50%);bottom:16px;width:calc(100% - 32px);max-width:420px;background:#161616;border:1px solid #333;border-radius:999px;display:flex;padding:6px}
 nav button{flex:1;background:none;border:0;color:#888;padding:11px 0;border-radius:999px;font-size:13px;font-weight:600}
 nav button.on{background:#fff;color:#000}
@@ -48,26 +62,47 @@ nav button.on{background:#fff;color:#000}
 <header>
   <svg viewBox="0 0 512 512"><path fill="#fff" d="M231.0,241.5 L149.0,241.5 L128.5,217.0 L183.0,145.5 L329.0,145.5 L374.5,205.0 L345.0,205.5 L317.0,169.5 L196.0,168.5 L158.5,217.0 L231.0,217.5 L231.0,241.5 Z M256.0,367.5 L160.5,254.0 L190.0,253.5 L256.0,330.5 L330.5,242.0 L269.0,239.5 L252.5,228.0 L243.0,205.5 L184.0,205.5 L199.5,183.0 L311.0,181.5 L328.0,205.5 L276.0,205.5 L272.5,209.0 L273.5,215.0 L277.0,217.5 L382.0,217.5 L256.0,367.5 Z M256.0,311.5 L228.5,279.0 L243.5,285.0 L244.0,224.5 L256.0,238.5 L267.5,245.0 L267.5,285.0 L283.5,279.0 L256.0,311.5 Z"/></svg>
   <h1>Project ats</h1>
+  <span class="pill"><span class="dot" id="hd_dot"></span><span id="hd_txt">Siap</span></span>
 </header>
 
 <!-- TAB CABANG -->
 <section class="tab on" id="t0">
-  <div class="card">
-    <h2>Status</h2>
-    <div class="big" id="prog">0/0</div>
-    <div id="phase" style="color:#aaa;margin-top:4px">Siap</div>
-    <div class="bar"><i id="barfill"></i></div>
-    <div style="margin-top:10px">Server didapat: <b id="found">0</b></div>
-  </div>
-  <div class="card">
-    <h2>Target</h2>
-    <label>Jumlah server yang diinginkan (0 = tanpa target)</label>
-    <input type="number" id="target" inputmode="numeric">
-    <div class="row" style="margin-top:14px">
-      <button class="btn" id="bstart">Mulai</button>
-      <button class="btn o" id="bstop">Hentikan</button>
+  <div id="vready">
+    <div class="card" style="text-align:center">
+      <h2>Target server</h2>
+      <div class="step">
+        <button class="rb" id="bminus">&minus;</button>
+        <input type="number" id="target" inputmode="numeric">
+        <button class="rb" id="bplus">+</button>
+      </div>
+      <div style="color:#888;font-size:12px">0 = tanpa target</div>
+      <div style="color:#aaa;font-size:13px;margin-top:10px"><span id="sel">0</span> aplikasi dipilih</div>
     </div>
-    <div style="margin-top:10px;color:#888;font-size:13px">Dipilih: <span id="sel">0</span> aplikasi</div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <span class="pill"><span class="dot" id="p_sz"></span>Shizuku</span>
+        <span class="pill"><span class="dot" id="p_ac"></span>Aksesibilitas</span>
+        <span class="pill"><span class="dot" id="p_ov"></span>Di atas app</span>
+      </div>
+    </div>
+    <button class="btn big" id="bstart"><svg width="20" height="20" viewBox="0 0 24 24"><path fill="#000" d="M7 4l13 8-13 8z"/></svg>Mulai</button>
+  </div>
+
+  <div id="vrun" style="display:none">
+    <div class="card" style="text-align:center">
+      <svg width="190" height="190" viewBox="0 0 140 140">
+        <circle cx="70" cy="70" r="54" fill="none" stroke="#2a2a2a" stroke-width="10"/>
+        <circle id="ring" cx="70" cy="70" r="54" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-dasharray="339.3" stroke-dashoffset="339.3" transform="rotate(-90 70 70)" style="transition:stroke-dashoffset .3s"/>
+        <text id="ptxt" x="70" y="76" text-anchor="middle" fill="#fff" font-size="26" font-weight="700" font-family="sans-serif">0/0</text>
+        <text x="70" y="96" text-anchor="middle" fill="#888" font-size="10" font-family="sans-serif">aplikasi</text>
+      </svg>
+      <div><span class="pill" id="phase">Putaran 1</span></div>
+    </div>
+    <div class="row" style="flex-wrap:nowrap;margin-bottom:12px">
+      <div class="card num" style="margin:0"><b id="found">0</b><small>Server didapat</small></div>
+      <div class="card num" style="margin:0"><b id="tgt">0</b><small>Target server</small></div>
+    </div>
+    <button class="btn o big" id="bstop">Hentikan</button>
   </div>
 </section>
 
@@ -90,16 +125,25 @@ nav button.on{background:#fff;color:#000}
 
 <!-- TAB AKTIVITAS -->
 <section class="tab" id="t2">
-  <div class="card">
-    <h2>Server didapat (<span id="scount">0</span>)</h2>
-    <div id="srv">Belum ada server.</div>
+  <div class="sub">
+    <button class="btn sm" id="sub0">Log aktivitas</button>
+    <button class="btn sm o" id="sub1">Arsip</button>
   </div>
-  <div class="card">
-    <div class="row" style="justify-content:space-between;margin-bottom:10px">
-      <h2 style="margin:0">Log aktivitas</h2>
-      <button class="btn sm o" id="bdel">Hapus</button>
+  <div id="vlog">
+    <div class="card">
+      <h2>Server didapat (<span id="scount">0</span>)</h2>
+      <div class="mono" id="srv">Belum ada server.</div>
     </div>
-    <div id="log">Belum ada aktivitas.</div>
+    <div class="card">
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2 style="margin:0">Sesi terakhir</h2>
+        <button class="btn sm o" id="bdel">Hapus</button>
+      </div>
+      <div id="log" class="mono">Belum ada aktivitas.</div>
+    </div>
+  </div>
+  <div id="varc" style="display:none">
+    <div id="arc"><div class="card">Belum ada arsip.</div></div>
   </div>
 </section>
 
@@ -107,21 +151,24 @@ nav button.on{background:#fff;color:#000}
 <section class="tab" id="t3">
   <div class="card">
     <h2>Jeda (milidetik, 1000 = 1 detik)</h2>
-    <label>Jeda putaran 1</label>
+    <label>Jeda putaran 1 (jatah waktu tiap aplikasi)</label>
     <input type="number" id="d1" inputmode="numeric">
     <div class="hint" id="h1"></div>
     <label>Jeda putaran 2</label>
     <input type="number" id="d2" inputmode="numeric">
     <div class="hint" id="h2"></div>
+    <label>Jeda tengah (waktu tetap untuk membersihkan aplikasi)</label>
+    <input type="number" id="d3" inputmode="numeric">
+    <div class="hint" id="h3"></div>
     <label style="display:flex;align-items:center;gap:10px;color:#fff;margin-top:16px">
       <input type="checkbox" id="back" style="width:22px;height:22px;accent-color:#fff"> Kembali ke aplikasi ini setelah selesai
     </label>
   </div>
   <div class="card">
     <h2>Izin</h2>
-    <div class="st"><span><span class="dot" id="d_ov"></span>Tampil di atas aplikasi lain</span><button class="btn sm" id="bov">Atur</button></div>
-    <div class="st"><span><span class="dot" id="d_ac"></span>Aksesibilitas (baca layar)</span><button class="btn sm" id="bac">Atur</button></div>
-    <div class="st"><span><span class="dot" id="d_sz"></span>Shizuku (force stop)</span><button class="btn sm" id="bsz">Atur</button></div>
+    <div class="st"><span><span class="dot" id="d_ov"></span>&nbsp; Tampil di atas aplikasi lain</span><button class="btn sm" id="bov">Atur</button></div>
+    <div class="st"><span><span class="dot" id="d_ac"></span>&nbsp; Aksesibilitas (baca layar)</span><button class="btn sm" id="bac">Atur</button></div>
+    <div class="st"><span><span class="dot" id="d_sz"></span>&nbsp; Shizuku (force stop)</span><button class="btn sm" id="bsz">Atur</button></div>
     <div class="st"><span>Penghemat baterai</span><button class="btn sm o" id="bba">Atur</button></div>
     <div style="color:#888;font-size:12px;margin-top:8px">Pembacaan layar dan force stop hanya berlaku untuk aplikasi yang kamu centang.</div>
   </div>
@@ -137,29 +184,30 @@ nav button.on{background:#fff;color:#000}
 <script>
 var $=function(id){return document.getElementById(id)};
 var A=window.App;
-var apps=[], sel={}, shown=[];
-var S={d1:"7450",d2:"6500",target:"0",back:false,qf:""};
+var apps=[], sel={}, shown=[], openArc={};
+var S={d1:"7450",d2:"6500",d3:"600",target:"0",back:false,qf:""};
 var lastLogKey="";
-var MARK="===== Sesi baru =====";
+var MARK="===== Sesi baru";
+var MON=["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
 
 function load(){
   try{
     var s=JSON.parse(localStorage.getItem("ats_set")||"{}");
     for(var k in s)S[k]=s[k];
     sel=JSON.parse(localStorage.getItem("ats_sel")||"{}");
-    // Bersihkan nilai jeda lama (sekali saja)
     if(localStorage.getItem("ats_v")!=="2"){
       S.d1="7450";S.d2="6500";
       localStorage.setItem("ats_v","2");
       localStorage.setItem("ats_set",JSON.stringify(S));
     }
   }catch(e){}
-  $("d1").value=S.d1;$("d2").value=S.d2;$("target").value=S.target;
+  if(!S.d3)S.d3="600";
+  $("d1").value=S.d1;$("d2").value=S.d2;$("d3").value=S.d3;$("target").value=S.target;
   $("back").checked=!!S.back;$("qf").value=S.qf;
   hints();
 }
 function saveSet(){
-  S.d1=$("d1").value;S.d2=$("d2").value;S.target=$("target").value;
+  S.d1=$("d1").value;S.d2=$("d2").value;S.d3=$("d3").value;S.target=$("target").value;
   S.back=$("back").checked;S.qf=$("qf").value;
   try{localStorage.setItem("ats_set",JSON.stringify(S))}catch(e){}
   hints();
@@ -168,22 +216,23 @@ function saveSel(){
   try{localStorage.setItem("ats_sel",JSON.stringify(sel))}catch(e){}
   $("sel").textContent=Object.keys(sel).length;
 }
-
 function hintText(v){
   if(v===""||isNaN(Number(v)))return "Isi angka dalam milidetik.";
   var n=Number(v);
-  var sec=String(Math.round(n)/1000).replace(".",",");
-  var t="= "+sec+" detik";
+  var t="= "+String(Math.round(n)/1000).replace(".",",")+" detik";
   if(n<1000)t+='<br><b>Peringatan:</b> nilai di bawah 1000 (kurang dari 1 detik). Ingat, 1000 = 1 detik.';
   return t;
 }
 function hints(){
   $("h1").innerHTML=hintText($("d1").value);
   $("h2").innerHTML=hintText($("d2").value);
+  $("h3").innerHTML=hintText($("d3").value);
 }
-
-["d1","d2","target","qf"].forEach(function(id){$(id).addEventListener("input",saveSet)});
+["d1","d2","d3","target","qf"].forEach(function(id){$(id).addEventListener("input",saveSet)});
 $("back").addEventListener("change",saveSet);
+
+$("bminus").onclick=function(){var n=parseInt($("target").value||"0",10)||0;$("target").value=Math.max(0,n-1);saveSet()};
+$("bplus").onclick=function(){var n=parseInt($("target").value||"0",10)||0;$("target").value=n+1;saveSet()};
 
 function esc(t){return String(t).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]})}
 
@@ -214,7 +263,6 @@ $("bqf").onclick=function(){
   });
   render();
 };
-
 function loadApps(){
   try{apps=JSON.parse(A.apps())}catch(e){apps=[]}
   render();
@@ -224,7 +272,7 @@ $("bstart").onclick=function(){
   var p=apps.filter(function(a){return sel[a.pkg]}).map(function(a){return a.pkg});
   if(!p.length){alert("Centang aplikasi dulu di tab Apps.");return}
   saveSet();
-  try{A.start(JSON.stringify(p),S.d1||"7450",S.d2||"6500",S.target||"0",!!S.back)}catch(e){}
+  try{A.start(JSON.stringify(p),S.d1||"7450",S.d2||"6500",S.d3||"600",S.target||"0",!!S.back)}catch(e){}
 };
 $("bstop").onclick=function(){try{A.stop()}catch(e){}};
 $("bov").onclick=function(){try{A.overlay()}catch(e){}};
@@ -232,55 +280,118 @@ $("bac").onclick=function(){try{A.access()}catch(e){}};
 $("bba").onclick=function(){try{A.battery()}catch(e){}};
 $("bsz").onclick=function(){try{A.shizuku()}catch(e){}};
 $("bdel").onclick=function(){
-  if(!confirm("Hapus semua log dan daftar server?"))return;
+  if(!confirm("Hapus semua log, arsip, dan daftar server?"))return;
   var ok=true;
   try{ok=A.clearLogs()}catch(e){}
   if(!ok){alert("Tidak bisa dihapus saat sedang berjalan. Hentikan dulu.");return}
-  lastLogKey="";
+  lastLogKey="";openArc={};
   $("log").textContent="Belum ada aktivitas.";
   $("srv").textContent="Belum ada server.";
   $("scount").textContent="0";
+  $("arc").innerHTML='<div class="card">Belum ada arsip.</div>';
 };
 
-// Log dipisah per sesi (sesi terbaru di atas, baris terbaru di atas)
-function renderLog(lines){
-  var key=lines.length+"|"+lines[0]+"|"+lines[lines.length-1];
-  if(key===lastLogKey)return;
-  lastLogKey=key;
+// Sub-tab Aktivitas
+function sub(n){
+  $("vlog").style.display=n==0?"block":"none";
+  $("varc").style.display=n==1?"block":"none";
+  $("sub0").className="btn sm"+(n==0?"":" o");
+  $("sub1").className="btn sm"+(n==1?"":" o");
+}
+$("sub0").onclick=function(){sub(0)};
+$("sub1").onclick=function(){sub(1)};
+
+// Pecah log jadi sesi
+function parseSessions(lines){
   var ses=[],cur=null;
   lines.forEach(function(l){
-    if(String(l).indexOf(MARK)>-1){
-      cur={head:String(l),rows:[]};
+    l=String(l);
+    if(l.indexOf(MARK)>-1){
+      cur={head:l,rows:[]};
       ses.push(cur);
     }else{
       if(!cur){cur={head:"",rows:[]};ses.push(cur)}
       cur.rows.push(l);
     }
   });
-  var h="";
-  for(var i=ses.length-1;i>=0;i--){
-    var s=ses[i];
-    var m=s.head.match(/\d\d:\d\d:\d\d(\.\d+)?/);
-    var title="Sesi "+(i+1)+(m?' <small>('+esc(m[0])+')</small>':"");
-    var body=s.rows.slice().reverse().map(esc).join("\n");
-    h+='<div class="ses"><h3>'+title+'</h3><div>'+(body||"(kosong)")+'</div></div>';
-  }
-  $("log").innerHTML=h;
+  return ses;
 }
+function dateOf(head){
+  var m=head.match(/(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d)/);
+  if(!m)return null;
+  return parseInt(m[3],10)+" "+MON[parseInt(m[2],10)-1]+" "+m[1]+", "+m[4]+":"+m[5];
+}
+function timeOf(head){
+  var m=head.match(/\d\d:\d\d:\d\d(\.\d+)?/);
+  return m?m[0]:"";
+}
+function countApk(rows){
+  var n=0;
+  rows.forEach(function(r){if(/^\S+\s+Buka [A-Za-z0-9_.]+\s*$/.test(r))n++});
+  return n;
+}
+function countSrv(rows){
+  var n=0;
+  rows.forEach(function(r){if(/Server \d+ dicatat/.test(r))n++});
+  return n;
+}
+
+function renderLog(lines){
+  var key=lines.length+"|"+lines[0]+"|"+lines[lines.length-1];
+  if(key===lastLogKey)return;
+  lastLogKey=key;
+  var ses=parseSessions(lines);
+  var n=ses.length;
+  // Sesi terakhir
+  var last=ses[n-1];
+  var d=dateOf(last.head);
+  var title="Sesi "+n+' <small>('+esc(d||timeOf(last.head)||"tanggal tidak tercatat")+')</small>';
+  var body=last.rows.slice().reverse().map(esc).join("\n");
+  $("log").innerHTML='<div class="ses"><h3>'+title+'</h3><div>'+(body||"(kosong)")+'</div></div>';
+  // Arsip: sesi sebelumnya
+  var h="";
+  for(var i=n-2;i>=0;i--){
+    var s=ses[i];
+    var dd=dateOf(s.head);
+    var when=dd||("tanggal tidak tercatat"+(timeOf(s.head)?" ("+timeOf(s.head)+")":""));
+    var b=s.rows.slice().reverse().map(esc).join("\n");
+    h+='<div class="arc'+(openArc[i]?" open":"")+'" data-i="'+i+'"><div class="hd"><b>Sesi '+(i+1)+'</b><small>'+esc(when)+'</small><small>'+countApk(s.rows)+' apk dibuka &middot; '+countSrv(s.rows)+' server didapat</small></div><div class="bd mono">'+(b||"(kosong)")+'</div></div>';
+  }
+  $("arc").innerHTML=h||'<div class="card">Belum ada arsip.</div>';
+}
+$("arc").addEventListener("click",function(e){
+  var el=e.target;
+  while(el&&el!==this&&!(el.classList&&el.classList.contains("arc")))el=el.parentNode;
+  if(!el||el===this)return;
+  if(e.target.closest&&e.target.closest(".bd"))return;
+  var i=el.getAttribute("data-i");
+  var o=!el.classList.contains("open");
+  el.classList.toggle("open",o);
+  openArc[i]=o;
+});
 
 function poll(){
   var s;
   try{s=JSON.parse(A.status())}catch(e){return}
-  $("prog").textContent=s.done+"/"+s.total;
+  var run=!!s.running;
+  $("vready").style.display=run?"none":"block";
+  $("vrun").style.display=run?"block":"none";
+  $("hd_dot").className="dot"+(run?" ok":"");
+  $("hd_txt").textContent=run?"Berjalan":"Siap";
+  $("ptxt").textContent=s.done+"/"+s.total;
+  var pct=s.total?Math.min(1,s.done/s.total):0;
+  $("ring").setAttribute("stroke-dashoffset",(339.3*(1-pct)).toFixed(1));
   $("phase").textContent=s.phase;
   $("found").textContent=s.found;
-  $("barfill").style.width=(s.total?Math.round(s.done*100/s.total):0)+"%";
+  var t=parseInt(S.target||"0",10)||0;
+  $("tgt").textContent=t>0?t:"Bebas";
   $("d_ov").className="dot"+(s.overlay?" ok":"");
   $("d_ac").className="dot"+(s.access?" ok":"");
   $("d_sz").className="dot"+(s.shizuku?" ok":"");
-  if(s.logs&&s.logs.length){
-    renderLog(s.logs);
-  }
+  $("p_ov").className="dot"+(s.overlay?" ok":"");
+  $("p_ac").className="dot"+(s.access?" ok":"");
+  $("p_sz").className="dot"+(s.shizuku?" ok":"");
+  if(s.logs&&s.logs.length)renderLog(s.logs);
   if(s.servers&&s.servers.length){
     $("srv").textContent=s.servers.join("\n");
     $("scount").textContent=s.servers.length;
