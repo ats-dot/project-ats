@@ -63,7 +63,7 @@ class RunnerService : Service() {
         fun addLog(s: String) {
             synchronized(logs) {
                 logs.add(fmt.format(Date()) + "  " + s)
-                if (logs.size > 500) logs.removeAt(0)
+                if (logs.size > 1500) logs.removeAt(0)
                 persist()
             }
         }
@@ -149,6 +149,7 @@ class RunnerService : Service() {
             .setContentTitle("Project ats")
             .setContentText("Sedang berjalan")
             .setSmallIcon(R.drawable.ic_notif)
+            .setColor(Color.BLACK)
             .build()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -201,14 +202,30 @@ class RunnerService : Service() {
         return null
     }
 
-    // Force stop lewat Shizuku, tanpa animasi. Hanya untuk aplikasi yang dicentang.
+    // Force stop + buang kartu dari recent apps lewat Shizuku, tanpa animasi.
+    // Hanya untuk aplikasi yang dicentang.
     private fun dismiss(pkg: String) {
         if (!ShizukuHelper.hasPermission()) {
-            addLog("Shizuku belum aktif/diizinkan, $pkg tidak di-force stop")
+            addLog("Shizuku belum aktif/diizinkan, $pkg tidak dibersihkan")
             return
         }
         val ok = ShizukuHelper.forceStop(pkg)
         addLog(if (ok) "Force stop $pkg berhasil" else "Force stop $pkg gagal")
+        val r = ShizukuHelper.removeFromRecents(pkg)
+        addLog((if (r.first) "Recent $pkg: " else "Recent $pkg GAGAL: ") + r.second)
+    }
+
+    private fun ensureAccessibility() {
+        if (AtsAccessibilityService.instance != null) return
+        if (!ShizukuHelper.hasPermission()) return
+        addLog("Aksesibilitas mati, menyalakan lewat Shizuku")
+        ShizukuHelper.enableAccessibility()
+        var t = 0
+        while (AtsAccessibilityService.instance == null && t < 40 && !stopRequested) {
+            Thread.sleep(100)
+            t++
+        }
+        addLog(if (AtsAccessibilityService.instance != null) "Aksesibilitas aktif" else "Aksesibilitas belum aktif")
     }
 
     private fun runAll(pkgs: List<String>, d1: Long, d2: Long, target: Int, back: Boolean) {
@@ -217,9 +234,11 @@ class RunnerService : Service() {
         total = pkgs.size
         val map = LinkedHashMap<Int, String>()
         setServers(map)
-        AtsAccessibilityService.updateAllowed(pkgs.toSet())
 
         addLog("===== Sesi baru =====")
+        ensureAccessibility()
+        AtsAccessibilityService.updateAllowed(pkgs.toSet())
+
         if (AtsAccessibilityService.instance == null) {
             addLog("Izin Aksesibilitas belum aktif. Nyalakan dulu di Setelan.")
         }
@@ -245,10 +264,10 @@ class RunnerService : Service() {
             sleepMs(d1)
             val s = readServer()
             if (s == null) {
-                addLog("Server tidak terbaca, force stop $pkg")
+                addLog("Server tidak terbaca, bersihkan $pkg")
                 dismiss(pkg)
             } else if (map.containsKey(s)) {
-                addLog("Server $s sudah ada, force stop $pkg")
+                addLog("Server $s sudah ada, bersihkan $pkg")
                 dismiss(pkg)
             } else {
                 map[s] = pkg
