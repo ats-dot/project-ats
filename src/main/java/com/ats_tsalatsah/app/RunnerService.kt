@@ -235,6 +235,10 @@ class RunnerService : Service() {
         val map = LinkedHashMap<Int, String>()
         setServers(map)
 
+        // Aplikasi yang menunggu dibersihkan. Dibersihkan SETELAH aplikasi
+        // berikutnya terbuka, supaya layar tidak sempat balik ke Project ats.
+        var pending: String? = null
+
         addLog("===== Sesi baru =====")
         ensureAccessibility()
         AtsAccessibilityService.updateAllowed(pkgs.toSet())
@@ -263,12 +267,18 @@ class RunnerService : Service() {
             addLog("Buka $pkg")
             sleepMs(d1)
             val s = readServer()
+
+            // Aplikasi ini sudah di depan, aplikasi sebelumnya aman dibersihkan
+            val prev = pending
+            pending = null
+            if (prev != null) dismiss(prev)
+
             if (s == null) {
                 addLog("Server tidak terbaca, bersihkan $pkg")
-                dismiss(pkg)
+                pending = pkg
             } else if (map.containsKey(s)) {
                 addLog("Server $s sudah ada, bersihkan $pkg")
-                dismiss(pkg)
+                pending = pkg
             } else {
                 map[s] = pkg
                 found = map.size
@@ -288,10 +298,21 @@ class RunnerService : Service() {
             for (e in list) {
                 if (stopRequested) break
                 if (launch(e.value)) addLog("Buka server ${e.key} (${e.value})") else addLog("Gagal buka ${e.value}")
+
+                // Aplikasi putaran 2 sudah terbuka, bersihkan sisa dari putaran 1
+                val prev = pending
+                pending = null
+                if (prev != null) dismiss(prev)
+
                 sleepMs(d2)
                 done++
             }
         }
+
+        // Kalau masih ada yang menunggu dibersihkan, bersihkan sekarang
+        val last = pending
+        pending = null
+        if (last != null) dismiss(last)
 
         val result = map.size
         if (back && !stopRequested) launch(packageName)
