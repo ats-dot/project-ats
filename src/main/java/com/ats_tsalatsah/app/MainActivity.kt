@@ -1,9 +1,7 @@
 package com.ats_tsalatsah.app
 
 import android.app.Activity
-import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -100,6 +98,8 @@ class MainActivity : Activity() {
             val o = JSONObject(RunnerService.statusJson())
             o.put("overlay", Settings.canDrawOverlays(this@MainActivity))
             o.put("access", AtsAccessibilityService.isReady())
+            o.put("shizukuRun", ShizukuHelper.isRunning())
+            o.put("shizuku", ShizukuHelper.hasPermission())
             return o.toString()
         }
 
@@ -113,6 +113,12 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun access() {
             open(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+
+        // Minta izin Shizuku
+        @JavascriptInterface
+        fun shizuku() {
+            ShizukuHelper.requestPermission()
         }
 
         // Buka setelan penghemat baterai
