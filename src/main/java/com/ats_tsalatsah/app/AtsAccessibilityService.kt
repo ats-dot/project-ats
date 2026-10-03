@@ -24,6 +24,9 @@ class AtsAccessibilityService : AccessibilityService() {
         // Android membatasi screenshot sekitar 1 per detik
         private const val MIN_GAP = 1100L
 
+        // Urutan arah putar OCR: 90 dan 270 dulu (tulisan game menyamping)
+        private val ANGLES = intArrayOf(90, 270, 0, 180)
+
         fun isReady(): Boolean = instance != null
 
         // Hanya aplikasi yang dicentang yang boleh dibaca
@@ -89,13 +92,20 @@ class AtsAccessibilityService : AccessibilityService() {
     }
 
     // Coba OCR di 4 arah putar sampai server ketemu
-    private fun ocr(bmp: Bitmap, deg: Int, seen: StringBuilder, callback: (Int?) -> Unit) {
-        if (deg >= 360) {
+    private fun ocr(bmp: Bitmap, idx: Int, seen: StringBuilder, callback: (Int?) -> Unit) {
+        if (idx >= ANGLES.size) {
             lastReason = "OCR jalan di 4 arah, server tidak ketemu. Teks terbaca: " + short(seen.toString())
             callback(null)
             return
         }
-        val img = InputImage.fromBitmap(rotate(bmp, deg), 0)
+        val deg = ANGLES[idx]
+        val img = try {
+            InputImage.fromBitmap(rotate(bmp, deg), 0)
+        } catch (e: Exception) {
+            lastReason = "error putar gambar: " + (e.message ?: "?")
+            callback(null)
+            return
+        }
         recognizer.process(img)
             .addOnSuccessListener {
                 val s = pickServer(it.text)
@@ -104,7 +114,7 @@ class AtsAccessibilityService : AccessibilityService() {
                     callback(s)
                 } else {
                     if (seen.length < 200) seen.append(" [").append(deg).append("] ").append(it.text)
-                    ocr(bmp, deg + 90, seen, callback)
+                    ocr(bmp, idx + 1, seen, callback)
                 }
             }
             .addOnFailureListener {
