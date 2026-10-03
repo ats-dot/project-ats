@@ -110,6 +110,24 @@ object ShizukuHelper {
         }
     }
 
+    // Simpan satu foto layar ke folder Download (untuk pemeriksaan).
+    // Nama file tetap, jadi file lama ditimpa. Hanya dipanggil saat
+    // aplikasi yang dicentang ada di layar depan.
+    // Hasil: (berhasil, keterangan untuk log)
+    fun saveDebugShot(name: String): Pair<Boolean, String> {
+        if (!hasPermission()) return Pair(false, "Shizuku belum diizinkan")
+        if (!Regex("[A-Za-z0-9_.]+").matches(name)) return Pair(false, "nama file tidak valid")
+        return try {
+            val path = "/sdcard/Download/$name"
+            val r = run(arrayOf("screencap", "-p", path))
+            if (r.first == 0) Pair(true, "tersimpan di Download/$name")
+            else Pair(false, "gagal kode=${r.first} err=[${short(r.third)}]")
+        } catch (e: Throwable) {
+            val root = e.cause ?: e
+            Pair(false, "error: ${root.javaClass.simpleName} ${root.message ?: ""}")
+        }
+    }
+
     // Nama paket aplikasi yang sedang di layar depan, lewat Shizuku.
     // Hasil: (paket atau null, keterangan kalau gagal)
     fun foregroundPackage(): Pair<String?, String> {
