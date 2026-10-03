@@ -21,6 +21,8 @@ header h1{font-size:20px;margin:0}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 input[type=text],input[type=number]{width:100%;background:#000;color:#fff;border:1px solid #444;border-radius:14px;padding:11px 14px;font-size:15px}
 label{display:block;font-size:13px;color:#aaa;margin:10px 0 4px}
+.hint{font-size:12px;color:#888;margin-top:6px;min-height:16px}
+.hint b{color:#fff;text-decoration:underline}
 .big{font-size:38px;font-weight:700}
 .bar{height:8px;background:#2a2a2a;border-radius:99px;overflow:hidden;margin-top:10px}
 .bar i{display:block;height:100%;width:0;background:#fff;transition:width .3s}
@@ -30,6 +32,9 @@ label{display:block;font-size:13px;color:#aaa;margin:10px 0 4px}
 .app b{display:block;font-size:14px}
 .app small{color:#888;font-size:11px;word-break:break-all}
 #log,#srv{font-family:monospace;font-size:12px;line-height:1.6;color:#ccc;white-space:pre-wrap;word-break:break-all}
+.ses{border:1px solid #2a2a2a;border-radius:16px;padding:12px;margin-bottom:10px;background:#0a0a0a}
+.ses h3{margin:0 0 8px;font-size:13px;color:#fff;font-family:sans-serif}
+.ses h3 small{color:#888;font-weight:400}
 .st{display:flex;justify-content:space-between;align-items:center;padding:8px 0}
 .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#555;margin-right:6px}
 .dot.ok{background:#fff}
@@ -104,8 +109,10 @@ nav button.on{background:#fff;color:#000}
     <h2>Jeda (milidetik, 1000 = 1 detik)</h2>
     <label>Jeda putaran 1</label>
     <input type="number" id="d1" inputmode="numeric">
+    <div class="hint" id="h1"></div>
     <label>Jeda putaran 2</label>
     <input type="number" id="d2" inputmode="numeric">
+    <div class="hint" id="h2"></div>
     <label style="display:flex;align-items:center;gap:10px;color:#fff;margin-top:16px">
       <input type="checkbox" id="back" style="width:22px;height:22px;accent-color:#fff"> Kembali ke aplikasi ini setelah selesai
     </label>
@@ -132,25 +139,49 @@ var $=function(id){return document.getElementById(id)};
 var A=window.App;
 var apps=[], sel={}, shown=[];
 var S={d1:"7450",d2:"6500",target:"0",back:false,qf:""};
+var lastLogKey="";
+var MARK="===== Sesi baru =====";
 
 function load(){
   try{
     var s=JSON.parse(localStorage.getItem("ats_set")||"{}");
     for(var k in s)S[k]=s[k];
     sel=JSON.parse(localStorage.getItem("ats_sel")||"{}");
+    // Bersihkan nilai jeda lama (sekali saja)
+    if(localStorage.getItem("ats_v")!=="2"){
+      S.d1="7450";S.d2="6500";
+      localStorage.setItem("ats_v","2");
+      localStorage.setItem("ats_set",JSON.stringify(S));
+    }
   }catch(e){}
   $("d1").value=S.d1;$("d2").value=S.d2;$("target").value=S.target;
   $("back").checked=!!S.back;$("qf").value=S.qf;
+  hints();
 }
 function saveSet(){
   S.d1=$("d1").value;S.d2=$("d2").value;S.target=$("target").value;
   S.back=$("back").checked;S.qf=$("qf").value;
-  localStorage.setItem("ats_set",JSON.stringify(S));
+  try{localStorage.setItem("ats_set",JSON.stringify(S))}catch(e){}
+  hints();
 }
 function saveSel(){
-  localStorage.setItem("ats_sel",JSON.stringify(sel));
+  try{localStorage.setItem("ats_sel",JSON.stringify(sel))}catch(e){}
   $("sel").textContent=Object.keys(sel).length;
 }
+
+function hintText(v){
+  if(v===""||isNaN(Number(v)))return "Isi angka dalam milidetik.";
+  var n=Number(v);
+  var sec=String(Math.round(n)/1000).replace(".",",");
+  var t="= "+sec+" detik";
+  if(n<1000)t+='<br><b>Peringatan:</b> nilai di bawah 1000 (kurang dari 1 detik). Ingat, 1000 = 1 detik.';
+  return t;
+}
+function hints(){
+  $("h1").innerHTML=hintText($("d1").value);
+  $("h2").innerHTML=hintText($("d2").value);
+}
+
 ["d1","d2","target","qf"].forEach(function(id){$(id).addEventListener("input",saveSet)});
 $("back").addEventListener("change",saveSet);
 
@@ -205,10 +236,37 @@ $("bdel").onclick=function(){
   var ok=true;
   try{ok=A.clearLogs()}catch(e){}
   if(!ok){alert("Tidak bisa dihapus saat sedang berjalan. Hentikan dulu.");return}
+  lastLogKey="";
   $("log").textContent="Belum ada aktivitas.";
   $("srv").textContent="Belum ada server.";
   $("scount").textContent="0";
 };
+
+// Log dipisah per sesi (sesi terbaru di atas, baris terbaru di atas)
+function renderLog(lines){
+  var key=lines.length+"|"+lines[0]+"|"+lines[lines.length-1];
+  if(key===lastLogKey)return;
+  lastLogKey=key;
+  var ses=[],cur=null;
+  lines.forEach(function(l){
+    if(String(l).indexOf(MARK)>-1){
+      cur={head:String(l),rows:[]};
+      ses.push(cur);
+    }else{
+      if(!cur){cur={head:"",rows:[]};ses.push(cur)}
+      cur.rows.push(l);
+    }
+  });
+  var h="";
+  for(var i=ses.length-1;i>=0;i--){
+    var s=ses[i];
+    var m=s.head.match(/\d\d:\d\d:\d\d(\.\d+)?/);
+    var title="Sesi "+(i+1)+(m?' <small>('+esc(m[0])+')</small>':"");
+    var body=s.rows.slice().reverse().map(esc).join("\n");
+    h+='<div class="ses"><h3>'+title+'</h3><div>'+(body||"(kosong)")+'</div></div>';
+  }
+  $("log").innerHTML=h;
+}
 
 function poll(){
   var s;
@@ -221,7 +279,7 @@ function poll(){
   $("d_ac").className="dot"+(s.access?" ok":"");
   $("d_sz").className="dot"+(s.shizuku?" ok":"");
   if(s.logs&&s.logs.length){
-    $("log").textContent=s.logs.slice().reverse().join("\n");
+    renderLog(s.logs);
   }
   if(s.servers&&s.servers.length){
     $("srv").textContent=s.servers.join("\n");
