@@ -8,6 +8,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.ServiceInfo
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
@@ -142,15 +144,32 @@ class RunnerService : Service() {
         return START_NOT_STICKY
     }
 
+    // Gambar ikon aplikasi (latar hitam + logo putih) untuk notifikasi
+    private fun appIconBitmap(): Bitmap? {
+        return try {
+            val d = getDrawable(R.mipmap.ic_launcher) ?: return null
+            val size = 192
+            val bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            val c = Canvas(bmp)
+            d.setBounds(0, 0, size, size)
+            d.draw(c)
+            bmp
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun startAsForeground() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.createNotificationChannel(NotificationChannel("ats", "Project ats", NotificationManager.IMPORTANCE_LOW))
-        val n: Notification = Notification.Builder(this, "ats")
+        val b = Notification.Builder(this, "ats")
             .setContentTitle("Project ats")
             .setContentText("Sedang berjalan")
             .setSmallIcon(R.drawable.ic_notif)
             .setColor(Color.BLACK)
-            .build()
+        val big = appIconBitmap()
+        if (big != null) b.setLargeIcon(big)
+        val n: Notification = b.build()
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
@@ -178,6 +197,17 @@ class RunnerService : Service() {
         }
     }
 
+    // Pindah ke layar utama (home)
+    private fun goHome() {
+        val i = Intent(Intent.ACTION_MAIN)
+        i.addCategory(Intent.CATEGORY_HOME)
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(i)
+        } catch (e: Exception) {
+        }
+    }
+
     private fun readOnce(): Int? {
         val svc = AtsAccessibilityService.instance ?: return null
         val latch = CountDownLatch(1)
@@ -202,13 +232,15 @@ class RunnerService : Service() {
         return null
     }
 
-    // Force stop + buang kartu dari recent apps lewat Shizuku, tanpa animasi.
-    // Hanya untuk aplikasi yang dicentang.
+    // Pindah ke home dulu, lalu force stop + buang kartu dari recent apps
+    // lewat Shizuku, tanpa animasi. Hanya untuk aplikasi yang dicentang.
     private fun dismiss(pkg: String) {
         if (!ShizukuHelper.hasPermission()) {
             addLog("Shizuku belum aktif/diizinkan, $pkg tidak dibersihkan")
             return
         }
+        goHome()
+        Thread.sleep(200)
         val ok = ShizukuHelper.forceStop(pkg)
         addLog(if (ok) "Force stop $pkg berhasil" else "Force stop $pkg gagal")
         val r = ShizukuHelper.removeFromRecents(pkg)
@@ -234,10 +266,6 @@ class RunnerService : Service() {
         total = pkgs.size
         val map = LinkedHashMap<Int, String>()
         setServers(map)
-
-        // Aplikasi yang menunggu dibersihkan. Dibersihkan SETELAH aplikasi
-        // berikutnya terbuka, supaya layar tidak sempat balik ke Project ats.
-        var pending: String? = null
 
         addLog("===== Sesi baru =====")
         ensureAccessibility()
@@ -267,18 +295,12 @@ class RunnerService : Service() {
             addLog("Buka $pkg")
             sleepMs(d1)
             val s = readServer()
-
-            // Aplikasi ini sudah di depan, aplikasi sebelumnya aman dibersihkan
-            val prev = pending
-            pending = null
-            if (prev != null) dismiss(prev)
-
             if (s == null) {
                 addLog("Server tidak terbaca, bersihkan $pkg")
-                pending = pkg
+                dismiss(pkg)
             } else if (map.containsKey(s)) {
                 addLog("Server $s sudah ada, bersihkan $pkg")
-                pending = pkg
+                dismiss(pkg)
             } else {
                 map[s] = pkg
                 found = map.size
@@ -298,21 +320,10 @@ class RunnerService : Service() {
             for (e in list) {
                 if (stopRequested) break
                 if (launch(e.value)) addLog("Buka server ${e.key} (${e.value})") else addLog("Gagal buka ${e.value}")
-
-                // Aplikasi putaran 2 sudah terbuka, bersihkan sisa dari putaran 1
-                val prev = pending
-                pending = null
-                if (prev != null) dismiss(prev)
-
                 sleepMs(d2)
                 done++
             }
         }
-
-        // Kalau masih ada yang menunggu dibersihkan, bersihkan sekarang
-        val last = pending
-        pending = null
-        if (last != null) dismiss(last)
 
         val result = map.size
         if (back && !stopRequested) launch(packageName)
