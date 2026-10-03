@@ -17,6 +17,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
@@ -140,6 +141,8 @@ class RunnerService : Service() {
 
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var stopRequested = false
+    @Volatile private var lastSource = ""
+    @Volatile private var lastUsedAccess = false
     private var capsule: TextView? = null
 
     override fun onCreate() {
@@ -215,7 +218,7 @@ class RunnerService : Service() {
 
     // Tunggu sampai jam tertentu (uptime), supaya waktu per aplikasi tetap
     private fun sleepUntil(t: Long) {
-        val left = t - android.os.SystemClock.uptimeMillis()
+        val left = t - SystemClock.uptimeMillis()
         if (left > 0) sleepMs(left)
     }
 
@@ -241,10 +244,66 @@ class RunnerService : Service() {
         }
     }
 
-    // Satu kali baca. Alasan gagal diambil dari layanan aksesibilitas.
-    private fun readOnce(waitMs: Long): Pair<Int?, String> {
+    // Jalankan pekerjaan di thread terpisah dengan batas waktu,
+    // supaya tidak pernah menggantung dan jatah waktu tetap seragam.
+    private fun runLimited(limit: Long, job: () -> Pair<Int?, String>): Pair<Int?, String> {
+        val latch = CountDownLatch(1)
+        var res: Pair<Int?, String>? = null
+        val th = Thread {
+            try {
+                res = job()
+            } catch (e: Throwable) {
+                res = Pair(null, "error: " + e.javaClass.simpleName + " " + (e.message ?: ""))
+            }
+            latch.countDown()
+        }
+        th.isDaemon = true
+        th.start()
+        val ok = latch.await(limit, TimeUnit.MILLISECONDS)
+        return res ?: Pair(null, if (ok) "tanpa hasil" else "terlalu lama (batas $limit ms)")
+    }
+
+    // Jalur utama: cek aplikasi di layar depan lewat Shizuku (harus aplikasi
+    // yang dicentang), potret layar lewat Shizuku, lalu baca teksnya (OCR).
+    private fun readViaShizuku(budget: Long): Pair<Int?, String> {
+        val t0 = SystemClock.uptimeMillis()
+        val fg = ShizukuHelper.foregroundPackage()
+        val pkg = fg.first ?: return Pair(null, fg.second)
+        if (pkg !in AtsAccessibilityService.allowed) {
+            return Pair(null, "layar depan '$pkg' bukan aplikasi yang dicentang")
+        }
+        val cap = ShizukuHelper.captureScreen()
+        val bmp = cap.first ?: return Pair(null, cap.second)
+        val left = budget - (SystemClock.uptimeMillis() - t0)
+        if (left < 300) {
+            try {
+                bmp.recycle()
+            } catch (e: Throwable) {
+            }
+            return Pair(null, "waktu habis sebelum OCR")
+        }
+        val latch = CountDownLatch(1)
+        var r: Int? = null
+        AtsAccessibilityService.lastReason = ""
+        AtsAccessibilityService.ocrBitmap(bmp) {
+            r = it
+            latch.countDown()
+        }
+        val ok = latch.await(left, TimeUnit.MILLISECONDS)
+        if (r != null) return Pair(r, "")
+        val why = AtsAccessibilityService.lastReason
+        return Pair(
+            null,
+            if (why.isNotEmpty()) why
+            else if (!ok) "OCR terlalu lama"
+            else "OCR gagal tanpa alasan"
+        )
+    }
+
+    // Jalur cadangan: screenshot lewat layanan aksesibilitas.
+    private fun readViaAccessibility(waitMs: Long): Pair<Int?, String> {
         val svc = AtsAccessibilityService.instance
-            ?: return Pair(null, "layanan aksesibilitas mati")
+            ?: return Pair(null, "layanan mati")
         AtsAccessibilityService.lastReason = ""
         val latch = CountDownLatch(1)
         var r: Int? = null
@@ -260,30 +319,71 @@ class RunnerService : Service() {
         return Pair(
             null,
             if (why.isNotEmpty()) why
-            else if (!ok) "tidak ada jawaban dari layanan (timeout)"
+            else if (!ok) "tidak ada jawaban (timeout)"
             else "gagal tanpa alasan"
         )
     }
 
-    // Baca server di akhir jatah waktu: mulai di detik "rs" (bawaan 5000 ms).
-    // Tiap percobaan maksimal 3 detik supaya tidak menggantung.
-    // Jarak antar percobaan 1100 ms (batas screenshot Android).
+    // Satu kali baca: Shizuku dulu, kalau gagal baru aksesibilitas.
+    // Tidak pernah lebih lama dari waitMs.
+    private fun readOnce(waitMs: Long): Pair<Int?, String> {
+        val start = SystemClock.uptimeMillis()
+        lastUsedAccess = false
+        val reasons = ArrayList<String>()
+
+        if (ShizukuHelper.hasPermission()) {
+            val r = runLimited(waitMs) { readViaShizuku(waitMs) }
+            if (r.first != null) {
+                lastSource = "Shizuku"
+                return r
+            }
+            reasons.add("Shizuku: " + r.second)
+        } else {
+            reasons.add("Shizuku: belum diizinkan")
+        }
+
+        val left = waitMs - (SystemClock.uptimeMillis() - start)
+        if (AtsAccessibilityService.instance == null) {
+            reasons.add("Aksesibilitas: layanan mati")
+        } else if (left < 700) {
+            reasons.add("Aksesibilitas: sisa waktu terlalu sempit")
+        } else {
+            lastUsedAccess = true
+            val r = readViaAccessibility(left)
+            if (r.first != null) {
+                lastSource = "Aksesibilitas"
+                return r
+            }
+            reasons.add("Aksesibilitas: " + r.second)
+        }
+        return Pair(null, reasons.joinToString(" | "))
+    }
+
+    // Baca server di akhir jatah waktu: mulai di detik "rs" (bawaan 5000 ms),
+    // tapi paling lambat 1500 ms sebelum jatah habis.
+    // Tiap percobaan maksimal 3 detik dan tidak pernah melewati batas jatah.
+    // Jarak antar percobaan: 400 ms (Shizuku) atau 1100 ms (aksesibilitas).
     private fun readUntil(t0: Long, rs: Long, deadline: Long): Int? {
         sleepUntil(minOf(t0 + rs, deadline - 1500L))
+        val startedAt = SystemClock.uptimeMillis() - t0
         var tries = 0
         val reasons = ArrayList<String>()
         while (!stopRequested) {
-            val left = deadline - android.os.SystemClock.uptimeMillis()
-            if (left < 700) break
+            val left = deadline - SystemClock.uptimeMillis()
+            if (left < 500) break
             tries++
-            val res = readOnce(minOf(left - 100, 3000L))
-            if (res.first != null) return res.first
-            if (reasons.size < 4 && !reasons.contains(res.second)) reasons.add(res.second)
-            val gap = deadline - android.os.SystemClock.uptimeMillis()
+            val res = readOnce(minOf(left - 50, 3000L))
+            if (res.first != null) {
+                val at = SystemClock.uptimeMillis() - t0
+                addLog("Baca layar OK ($lastSource), percobaan ke-$tries, selesai di $at ms")
+                return res.first
+            }
+            if (reasons.size < 3 && !reasons.contains(res.second)) reasons.add(res.second)
+            val gap = deadline - SystemClock.uptimeMillis()
             if (gap <= 0) break
-            sleepMs(minOf(1100L, gap))
+            sleepMs(minOf(if (lastUsedAccess) 1100L else 400L, gap))
         }
-        addLog("Baca layar: $tries percobaan, tidak ketemu")
+        addLog("Baca layar: $tries percobaan (mulai di $startedAt ms), tidak ketemu")
         for (r in reasons) addLog("  alasan: $r")
         return null
     }
@@ -335,11 +435,13 @@ class RunnerService : Service() {
         ensureAccessibility()
         AtsAccessibilityService.updateAllowed(pkgs.toSet())
 
-        if (AtsAccessibilityService.instance == null) {
-            addLog("Izin Aksesibilitas belum aktif. Nyalakan dulu di Setelan.")
-        }
         if (!ShizukuHelper.hasPermission()) {
             addLog("Shizuku belum aktif/diizinkan. Cek tab Setelan.")
+            if (AtsAccessibilityService.instance == null) {
+                addLog("Aksesibilitas juga mati, server tidak akan terbaca.")
+            }
+        } else if (AtsAccessibilityService.instance == null) {
+            addLog("Aksesibilitas mati, baca layar memakai Shizuku saja.")
         }
 
         // Putaran 1: tiap aplikasi dapat jatah waktu tetap (jeda 1)
@@ -351,7 +453,7 @@ class RunnerService : Service() {
                 addLog("Target $target server tercapai, sisa aplikasi dilewati")
                 break
             }
-            val t0 = android.os.SystemClock.uptimeMillis()
+            val t0 = SystemClock.uptimeMillis()
             if (!launch(pkg)) {
                 addLog("Gagal buka $pkg")
                 done++
@@ -378,16 +480,16 @@ class RunnerService : Service() {
             }
 
             if (cleaned && !stopRequested) {
-                val c0 = android.os.SystemClock.uptimeMillis()
+                val c0 = SystemClock.uptimeMillis()
                 dismiss(pkg)
-                val used = android.os.SystemClock.uptimeMillis() - c0
+                val used = SystemClock.uptimeMillis() - c0
                 if (used > d3) {
                     addLog("Pembersihan butuh $used ms, melebihi jeda tengah $d3 ms")
                 } else {
                     sleepUntil(c0 + d3)
                 }
             }
-            val total1 = android.os.SystemClock.uptimeMillis() - t0
+            val total1 = SystemClock.uptimeMillis() - t0
             addLog("Waktu aplikasi ini: $total1 ms")
             done++
         }
