@@ -31,6 +31,9 @@ class AtsAccessibilityService : AccessibilityService() {
         // Android membatasi screenshot aksesibilitas sekitar 1 per detik
         private const val MIN_GAP = 1100L
 
+        // Sisi terpanjang gambar sebelum OCR (gambar besar membuat OCR lambat)
+        private const val MAX_SIDE = 1280
+
         // Urutan arah putar OCR. Gambar layar mendatar biasanya sudah tegak (0).
         private val DEFAULT_ANGLES = intArrayOf(0, 90, 270, 180)
 
@@ -71,6 +74,16 @@ class AtsAccessibilityService : AccessibilityService() {
             return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
         }
 
+        // Kecilkan gambar kalau sisi terpanjangnya melebihi MAX_SIDE
+        private fun shrink(src: Bitmap): Bitmap {
+            val big = maxOf(src.width, src.height)
+            if (big <= MAX_SIDE) return src
+            val f = MAX_SIDE.toFloat() / big
+            val w = maxOf(1, (src.width * f).toInt())
+            val h = maxOf(1, (src.height * f).toInt())
+            return Bitmap.createScaledBitmap(src, w, h, true)
+        }
+
         // Arah yang terakhir berhasil dicoba duluan, lalu sisanya berurutan
         private fun angleOrder(): IntArray {
             val b = bestAngle
@@ -93,7 +106,7 @@ class AtsAccessibilityService : AccessibilityService() {
             }
             val deg = order[idx]
             val t0 = SystemClock.uptimeMillis()
-            lastReason = "OCR sedang di arah $deg" +
+            lastReason = "OCR sedang di arah $deg (gambar ${bmp.width}x${bmp.height})" +
                 (if (seen.isNotEmpty()) ", sebelumnya:" + shortN(seen.toString(), 200) else "")
 
             val rot: Bitmap
@@ -144,11 +157,26 @@ class AtsAccessibilityService : AccessibilityService() {
         }
 
         // Baca server dari sebuah gambar (mis. dari screencap Shizuku).
-        // Gambar diambil alih dan dibebaskan sendiri setelah selesai.
+        // Gambar dikecilkan dulu. Gambar asli dibebaskan sendiri setelah selesai.
         fun ocrBitmap(bmp: Bitmap, callback: (Int?) -> Unit) {
-            ocr(bmp, angleOrder(), 0, StringBuilder()) { r ->
+            val s0 = SystemClock.uptimeMillis()
+            val small = try {
+                shrink(bmp)
+            } catch (e: Throwable) {
+                bmp
+            }
+            val shrinkMs = SystemClock.uptimeMillis() - s0
+            if (small !== bmp) {
                 try {
-                    if (!bmp.isRecycled) bmp.recycle()
+                    bmp.recycle()
+                } catch (e: Throwable) {
+                }
+            }
+            val seen = StringBuilder()
+            seen.append("(kecilkan ").append(shrinkMs).append(" ms)")
+            ocr(small, angleOrder(), 0, seen) { r ->
+                try {
+                    if (!small.isRecycled) small.recycle()
                 } catch (e: Throwable) {
                 }
                 callback(r)
