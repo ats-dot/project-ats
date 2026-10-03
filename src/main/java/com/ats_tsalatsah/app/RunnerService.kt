@@ -155,7 +155,7 @@ class RunnerService : Service() {
         found = 0
         total = pkgs.size
         val map = LinkedHashMap<Int, String>()
-        AtsAccessibilityService.setAllowed(pkgs.toSet())
+        AtsAccessibilityService.updateAllowed(pkgs.toSet())
 
         if (AtsAccessibilityService.instance == null) {
             addLog("Izin Aksesibilitas belum aktif. Nyalakan dulu di Setelan.")
