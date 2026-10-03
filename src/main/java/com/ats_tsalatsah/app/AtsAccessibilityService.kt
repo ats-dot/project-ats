@@ -31,8 +31,8 @@ class AtsAccessibilityService : AccessibilityService() {
         // Android membatasi screenshot aksesibilitas sekitar 1 per detik
         private const val MIN_GAP = 1100L
 
-        // Sisi terpanjang gambar sebelum OCR (gambar besar membuat OCR lambat)
-        private const val MAX_SIDE = 1280
+        // Sisi terpanjang gambar sebelum OCR (gambar kecil = OCR cepat)
+        private const val MAX_SIDE = 1000
 
         // Urutan arah putar OCR. Gambar layar mendatar biasanya sudah tegak (0).
         private val DEFAULT_ANGLES = intArrayOf(0, 90, 270, 180)
@@ -74,6 +74,16 @@ class AtsAccessibilityService : AccessibilityService() {
             return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
         }
 
+        // Ambil bagian tengah layar saja (kotak "ZoneID" ada di tengah)
+        private fun cropCenter(src: Bitmap): Bitmap {
+            val x = (src.width * 0.15f).toInt()
+            val y = (src.height * 0.15f).toInt()
+            val w = src.width - 2 * x
+            val h = src.height - 2 * y
+            if (w < 50 || h < 50) return src
+            return Bitmap.createBitmap(src, x, y, w, h)
+        }
+
         // Kecilkan gambar kalau sisi terpanjangnya melebihi MAX_SIDE
         private fun shrink(src: Bitmap): Bitmap {
             val big = maxOf(src.width, src.height)
@@ -96,7 +106,8 @@ class AtsAccessibilityService : AccessibilityService() {
         }
 
         // Coba OCR di beberapa arah putar sampai server ketemu.
-        // Progres dicatat di lastReason supaya kelihatan walau kena batas waktu.
+        // Kalau 2 arah pertama hasilnya kosong total, berhenti (tidak ada teks
+        // di layar, jadi percuma memutar lagi).
         private fun ocr(bmp: Bitmap, order: IntArray, idx: Int, seen: StringBuilder, callback: (Int?) -> Unit) {
             if (idx >= order.size) {
                 lastReason = "OCR jalan di ${order.size} arah, server tidak ketemu. Teks terbaca:" +
@@ -130,11 +141,18 @@ class AtsAccessibilityService : AccessibilityService() {
                             lastReason = ""
                             callback(s)
                         } else {
+                            val txt = it.text.trim()
                             if (seen.length < 300) {
                                 seen.append(" [arah ").append(deg).append(", ").append(ms)
                                     .append(" ms] ").append(shortN(it.text, 80))
                             }
-                            ocr(bmp, order, idx + 1, seen, callback)
+                            if (txt.length < 3 && idx >= 1) {
+                                lastReason = "layar tidak berisi teks (kosong di 2 arah)." +
+                                    shortN(seen.toString(), 200)
+                                callback(null)
+                            } else {
+                                ocr(bmp, order, idx + 1, seen, callback)
+                            }
                         }
                     }
                     .addOnFailureListener {
@@ -157,23 +175,35 @@ class AtsAccessibilityService : AccessibilityService() {
         }
 
         // Baca server dari sebuah gambar (mis. dari screencap Shizuku).
-        // Gambar dikecilkan dulu. Gambar asli dibebaskan sendiri setelah selesai.
+        // Gambar dipotong ke bagian tengah, dikecilkan, lalu dibaca.
+        // Gambar asli dibebaskan sendiri setelah selesai.
         fun ocrBitmap(bmp: Bitmap, callback: (Int?) -> Unit) {
             val s0 = SystemClock.uptimeMillis()
-            val small = try {
-                shrink(bmp)
+            val cropped = try {
+                cropCenter(bmp)
             } catch (e: Throwable) {
                 bmp
             }
-            val shrinkMs = SystemClock.uptimeMillis() - s0
-            if (small !== bmp) {
+            val small = try {
+                shrink(cropped)
+            } catch (e: Throwable) {
+                cropped
+            }
+            if (cropped !== bmp) {
                 try {
                     bmp.recycle()
                 } catch (e: Throwable) {
                 }
             }
+            if (small !== cropped) {
+                try {
+                    cropped.recycle()
+                } catch (e: Throwable) {
+                }
+            }
+            val prepMs = SystemClock.uptimeMillis() - s0
             val seen = StringBuilder()
-            seen.append("(kecilkan ").append(shrinkMs).append(" ms)")
+            seen.append("(siapkan gambar ").append(prepMs).append(" ms)")
             ocr(small, angleOrder(), 0, seen) { r ->
                 try {
                     if (!small.isRecycled) small.recycle()
