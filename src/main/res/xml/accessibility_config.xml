@@ -7,4 +7,4 @@
     android:canPerformGestures="true"
     android:canTakeScreenshot="true"
     android:notificationTimeout="100"
-    android:description="Membaca layar aplikasi yang kamu centang saja, untuk mencatat server dan membuang aplikasi dari recent apps." />
+    android:description="@string/ats_access_desc" />
