@@ -20,6 +20,8 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        RunnerService.initStore(this)
+
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(arrayOf("android.permission.POST_NOTIFICATIONS"), 1)
         }
@@ -92,7 +94,11 @@ class MainActivity : Activity() {
             startService(i)
         }
 
-        // Status jalan + log + status izin
+        // Hapus log + daftar server. Return false kalau sedang berjalan.
+        @JavascriptInterface
+        fun clearLogs(): Boolean = RunnerService.clearAll()
+
+        // Status jalan + log + server + status izin
         @JavascriptInterface
         fun status(): String {
             val o = JSONObject(RunnerService.statusJson())
