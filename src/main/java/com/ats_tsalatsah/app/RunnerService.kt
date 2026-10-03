@@ -179,7 +179,8 @@ class RunnerService : Service() {
             sleepMs(d1)
             val s = readServer()
             if (s == null) {
-                addLog("Server tidak terbaca: $pkg")
+                addLog("Server tidak terbaca, buang $pkg dari recent apps")
+                dismiss()
             } else if (map.containsKey(s)) {
                 addLog("Server $s sudah ada, buang $pkg dari recent apps")
                 dismiss()
