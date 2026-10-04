@@ -366,8 +366,7 @@ class RunnerService : Service() {
                     if (z != null) {
                         val at = st.foundUptime - t0
                         val jam = if (st.logTime.isEmpty()) "-" else st.logTime
-                        val wp = if (st.linePid.isEmpty()) "-" else st.linePid
-                        addLog("Baca log OK: server $z ketemu di $at ms (uid=$uid, pid penulis=$wp, jam pesan $jam, baris dibaca ${st.lines})")
+                        addLog("Baca log OK: server $z ketemu di $at ms (uid=$uid, jam pesan $jam, baris dibaca ${st.lines})")
                         closeAsync(st)
                         stream = null
                         return z
@@ -436,6 +435,51 @@ class RunnerService : Service() {
         addLog((if (r.first) "Recent $pkg: " else "Recent $pkg GAGAL: ") + r.second)
     }
 
+    // Bersihkan aplikasi lalu tunggu sampai jeda tengah (waktu tetap)
+    private fun cleanAndWait(pkg: String, d3: Long) {
+        if (stopRequested) return
+        val c0 = SystemClock.uptimeMillis()
+        dismiss(pkg)
+        val used = SystemClock.uptimeMillis() - c0
+        if (used > d3) {
+            addLog("Pembersihan butuh $used ms, melebihi jeda tengah $d3 ms")
+        } else {
+            sleepUntil(c0 + d3)
+        }
+    }
+
+    // Buka satu aplikasi dan baca servernya selama jatah d1.
+    // Hasil: (berhasil dibuka, nomor server atau null)
+    private fun openAndRead(pkg: String, d1: Long): Pair<Boolean, Int?> {
+        // UID diambil sebelum aplikasi dibuka (cepat, tanpa Shizuku)
+        var uid = -1
+        var uidErr = ""
+        try {
+            uid = packageManager.getApplicationInfo(pkg, 0).uid
+        } catch (e: Throwable) {
+            uidErr = e.javaClass.simpleName + " " + (e.message ?: "")
+        }
+
+        val wall = System.currentTimeMillis()
+        val t0 = SystemClock.uptimeMillis()
+        if (!launch(pkg)) {
+            addLog("Gagal buka $pkg")
+            return Pair(false, null)
+        }
+        addLog("Buka $pkg")
+        if (uid >= 0) {
+            addLog("UID $pkg = $uid")
+        } else {
+            addLog("UID $pkg tidak bisa diambil: $uidErr")
+        }
+
+        val deadline = t0 + d1
+        val s: Int? = if (uid >= 0) readUntil(pkg, uid, t0, wall, deadline) else null
+        // Walau sudah terbaca, tetap tunggu sampai jatah habis
+        sleepUntil(deadline)
+        return Pair(true, s)
+    }
+
     private fun runAll(pkgs: List<String>, d1: Long, d2: Long, d3: Long, target: Int, back: Boolean) {
         done = 0
         found = 0
@@ -454,7 +498,8 @@ class RunnerService : Service() {
             return
         }
 
-        // Putaran 1: tiap aplikasi dapat jatah waktu tetap (jeda 1)
+        // Putaran 1: tiap aplikasi dapat jatah waktu tetap (jeda 1).
+        // Server kembar: dibersihkan, dibuka ulang SATU kali, lalu dicek lagi.
         phase = "Putaran 1"
         addLog("Mulai putaran 1 (${pkgs.size} aplikasi)")
         for (pkg in pkgs) {
@@ -464,59 +509,56 @@ class RunnerService : Service() {
                 break
             }
 
-            // UID diambil sebelum aplikasi dibuka (cepat, tanpa Shizuku)
-            var uid = -1
-            var uidErr = ""
-            try {
-                uid = packageManager.getApplicationInfo(pkg, 0).uid
-            } catch (e: Throwable) {
-                uidErr = e.javaClass.simpleName + " " + (e.message ?: "")
-            }
-
-            val wall = System.currentTimeMillis()
-            val t0 = SystemClock.uptimeMillis()
-            if (!launch(pkg)) {
-                addLog("Gagal buka $pkg")
+            val tA = SystemClock.uptimeMillis()
+            val first = openAndRead(pkg, d1)
+            if (!first.first) {
                 done++
                 continue
             }
-            addLog("Buka $pkg")
-            if (uid >= 0) {
-                addLog("UID $pkg = $uid")
-            } else {
-                addLog("UID $pkg tidak bisa diambil: $uidErr")
-            }
+            val s1 = first.second
 
-            val deadline = t0 + d1
-            val s: Int? = if (uid >= 0) readUntil(pkg, uid, t0, wall, deadline) else null
-            // Walau sudah terbaca, tetap tunggu sampai jatah habis
-            sleepUntil(deadline)
-
-            if (s != null && !map.containsKey(s)) {
+            if (s1 != null && !map.containsKey(s1)) {
                 // Server baru: dicatat, TIDAK dibersihkan
-                map[s] = pkg
+                map[s1] = pkg
                 found = map.size
                 setServers(map)
-                addLog("Server $s dicatat ($pkg)")
+                addLog("Server $s1 dicatat ($pkg)")
+                addLog("Waktu aplikasi ini: ${SystemClock.uptimeMillis() - tA} ms")
+            } else if (s1 == null) {
+                // Tidak terbaca: langsung dibersihkan, tanpa percobaan ulang
+                addLog("Server tidak terbaca, bersihkan $pkg")
+                cleanAndWait(pkg, d3)
+                addLog("Waktu aplikasi ini: ${SystemClock.uptimeMillis() - tA} ms")
             } else {
-                if (s == null) {
-                    addLog("Server tidak terbaca, bersihkan $pkg")
-                } else {
-                    addLog("Server $s sudah ada, bersihkan $pkg")
-                }
+                // Server kembar: bersihkan, buka ulang satu kali
+                addLog("Server $s1 sudah ada, bersihkan $pkg lalu coba buka ulang 1 kali")
+                cleanAndWait(pkg, d3)
+                addLog("Waktu aplikasi ini: ${SystemClock.uptimeMillis() - tA} ms")
+
                 if (!stopRequested) {
-                    val c0 = SystemClock.uptimeMillis()
-                    dismiss(pkg)
-                    val used = SystemClock.uptimeMillis() - c0
-                    if (used > d3) {
-                        addLog("Pembersihan butuh $used ms, melebihi jeda tengah $d3 ms")
+                    val tB = SystemClock.uptimeMillis()
+                    addLog("Percobaan ulang $pkg (server sebelumnya $s1)")
+                    val second = openAndRead(pkg, d1)
+                    val s2 = second.second
+                    if (!second.first) {
+                        addLog("Percobaan ulang gagal membuka $pkg")
+                    } else if (s2 != null && !map.containsKey(s2)) {
+                        map[s2] = pkg
+                        found = map.size
+                        setServers(map)
+                        addLog("Percobaan ulang: server baru $s2")
+                        addLog("Server $s2 dicatat ($pkg)")
                     } else {
-                        sleepUntil(c0 + d3)
+                        if (s2 == null) {
+                            addLog("Percobaan ulang: server tidak terbaca, bersihkan $pkg")
+                        } else {
+                            addLog("Percobaan ulang: server $s2 sudah ada, bersihkan $pkg")
+                        }
+                        cleanAndWait(pkg, d3)
                     }
+                    addLog("Waktu percobaan ulang: ${SystemClock.uptimeMillis() - tB} ms")
                 }
             }
-            val total1 = SystemClock.uptimeMillis() - t0
-            addLog("Waktu aplikasi ini: $total1 ms")
             done++
         }
 
