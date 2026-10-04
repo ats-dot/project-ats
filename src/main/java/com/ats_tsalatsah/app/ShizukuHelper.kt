@@ -3,20 +3,21 @@ package com.ats_tsalatsah.app
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.os.IBinder
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
 import rikka.shizuku.SystemServiceHelper
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 object ShizukuHelper {
 
-    private const val SERVICE =
-        "com.ats_tsalatsah.app/com.ats_tsalatsah.app.AtsAccessibilityService"
-
     private var bypassed = false
+
+    // Pesan server di logcat: "... ZoneID = 57098 stack: ..."
+    private val ZONE = Regex("ZoneID\\s*=\\s*(\\d{5})", RegexOption.IGNORE_CASE)
 
     private fun bypass() {
         if (bypassed) return
@@ -26,6 +27,8 @@ object ShizukuHelper {
         }
         bypassed = true
     }
+
+    private fun validPkg(p: String): Boolean = Regex("[A-Za-z0-9_.]+").matches(p)
 
     fun isRunning(): Boolean = try {
         Shizuku.pingBinder()
@@ -75,87 +78,102 @@ object ShizukuHelper {
         return Triple(code, out.trim(), err.trim())
     }
 
-    // Sama seperti run, tapi keluaran berupa byte (untuk gambar)
-    private fun runBytes(cmd: Array<String>): Triple<Int, ByteArray, String> {
-        val p = start(cmd)
-        var err = ""
-        val t = Thread {
-            try {
-                err = p.errorStream.bufferedReader().readText()
-            } catch (e: Throwable) {
-            }
-        }
-        t.start()
-        val out = p.inputStream.readBytes()
-        val code = p.waitFor()
-        t.join(1000)
-        return Triple(code, out, err.trim())
+    private fun short(s: String): String {
+        val t = s.replace("\n", " ").trim()
+        if (t.isEmpty()) return "(kosong)"
+        return if (t.length > 160) t.substring(0, 160) + "..." else t
     }
 
-    // Potret layar lewat Shizuku (tanpa aksesibilitas).
-    // Hasil: (gambar atau null, keterangan kalau gagal)
-    fun captureScreen(): Pair<Bitmap?, String> {
+    // ---------------------------------------------------------------
+    // Baca server dari logcat (tanpa layar)
+    // ---------------------------------------------------------------
+
+    // Cari nomor proses (PID) utama sebuah aplikasi.
+    // Hasil: (pid atau null, keterangan kalau gagal)
+    fun pidOf(pkg: String): Pair<Int?, String> {
         if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
+        if (!validPkg(pkg)) return Pair(null, "nama paket tidak valid")
         return try {
-            val r = runBytes(arrayOf("screencap", "-p"))
-            if (r.first != 0 || r.second.isEmpty()) {
-                return Pair(null, "screencap gagal kode=${r.first} err=[${short(r.third)}]")
-            }
-            val bmp = BitmapFactory.decodeByteArray(r.second, 0, r.second.size)
-                ?: return Pair(null, "gambar screencap tidak bisa dibaca (${r.second.size} byte)")
-            Pair(bmp, "")
+            val r = run(arrayOf("pidof", pkg))
+            val pid = Regex("\\d+").find(r.second)?.value?.toIntOrNull()
+            if (pid != null) Pair(pid, "")
+            else Pair(null, "pidof kode=${r.first} keluaran=[${short(r.second)}] err=[${short(r.third)}]")
         } catch (e: Throwable) {
             val root = e.cause ?: e
-            Pair(null, "error screencap: ${root.javaClass.simpleName} ${root.message ?: ""}")
+            Pair(null, "error pidof: ${root.javaClass.simpleName} ${root.message ?: ""}")
         }
     }
 
-    // Simpan satu foto layar ke folder Download (untuk pemeriksaan).
-    // Nama file tetap, jadi file lama ditimpa. Hanya dipanggil saat
-    // aplikasi yang dicentang ada di layar depan.
-    // Hasil: (berhasil, keterangan untuk log)
-    fun saveDebugShot(name: String): Pair<Boolean, String> {
-        if (!hasPermission()) return Pair(false, "Shizuku belum diizinkan")
-        if (!Regex("[A-Za-z0-9_.]+").matches(name)) return Pair(false, "nama file tidak valid")
+    // Cari angka dari pesan "ZoneID = N". Hanya angka di rentang
+    // 57092..57115 yang diterima; kalau ada beberapa, diambil yang terakhir.
+    // Hasil: (angka valid atau null, catatan)
+    private fun pickZone(text: String): Pair<Int?, String> {
+        var valid: Int? = null
+        var other = ""
+        var n = 0
+        for (m in ZONE.findAll(text)) {
+            n++
+            val v = m.groupValues[1].toInt()
+            if (v in 57092..57115) valid = v else other = v.toString()
+        }
+        val note = if (valid == null && n > 0) "ada ZoneID di luar rentang ($other)" else ""
+        return Pair(valid, note)
+    }
+
+    // Baca logcat satu kali dan cari "ZoneID = N".
+    // - pid ada: hanya log milik proses itu (aplikasi yang dicentang).
+    // - pid null: cadangan, log sejak waktu sinceMs (belum teruji).
+    // Hanya baris yang mengandung "ZoneID" yang dibawa ke aplikasi.
+    // Hasil: (angka atau null, keterangan untuk log)
+    fun readZoneId(pid: Int?, sinceMs: Long): Pair<Int?, String> {
+        if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
+        val cmd: String
+        val mode: String
+        if (pid != null) {
+            cmd = "logcat -d --pid=$pid | grep ZoneID"
+            mode = "pid=$pid"
+        } else {
+            val t = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date(sinceMs))
+            cmd = "logcat -d -T '$t' | grep ZoneID"
+            mode = "sejak $t"
+        }
         return try {
-            val path = "/sdcard/Download/$name"
-            val r = run(arrayOf("screencap", "-p", path))
-            if (r.first == 0) Pair(true, "tersimpan di Download/$name")
-            else Pair(false, "gagal kode=${r.first} err=[${short(r.third)}]")
+            val r = run(arrayOf("sh", "-c", cmd))
+            val hit = pickZone(r.second)
+            if (hit.first != null) {
+                Pair(hit.first, mode)
+            } else {
+                val err = if (r.third.isEmpty()) "" else " err=[${short(r.third)}]"
+                val note = if (hit.second.isEmpty()) "" else ", ${hit.second}"
+                Pair(null, "$mode: belum ada ZoneID valid (kode=${r.first}$note)$err")
+            }
         } catch (e: Throwable) {
             val root = e.cause ?: e
-            Pair(false, "error: ${root.javaClass.simpleName} ${root.message ?: ""}")
+            Pair(null, "error logcat: ${root.javaClass.simpleName} ${root.message ?: ""}")
         }
     }
 
-    // Nama paket aplikasi yang sedang di layar depan, lewat Shizuku.
-    // Hasil: (paket atau null, keterangan kalau gagal)
-    fun foregroundPackage(): Pair<String?, String> {
-        if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
-        val cmds = arrayOf(
-            "dumpsys activity activities | grep -m1 -E 'topResumedActivity|mResumedActivity'",
-            "dumpsys window | grep -m1 -E 'mCurrentFocus|mFocusedApp'"
-        )
-        val re = Regex("([A-Za-z][A-Za-z0-9_]*(?:\\.[A-Za-z0-9_]+)+)/")
-        var last = ""
-        for (c in cmds) {
-            try {
-                val r = run(arrayOf("sh", "-c", c))
-                last = short(r.second)
-                val m = re.find(r.second)
-                if (m != null) return Pair(m.groupValues[1], "")
-            } catch (e: Throwable) {
-                val root = e.cause ?: e
-                last = "error ${root.javaClass.simpleName} ${root.message ?: ""}"
-            }
+    // Hitung jumlah baris log milik sebuah proses (untuk diagnosa kalau gagal).
+    fun logLineCount(pid: Int): String {
+        if (!hasPermission()) return "Shizuku belum diizinkan"
+        return try {
+            val r = run(arrayOf("sh", "-c", "logcat -d --pid=$pid | wc -l"))
+            val n = r.second.trim()
+            if (r.first == 0 && n.isNotEmpty()) "$n baris" else "gagal kode=${r.first} err=[${short(r.third)}]"
+        } catch (e: Throwable) {
+            val root = e.cause ?: e
+            "error: ${root.javaClass.simpleName} ${root.message ?: ""}"
         }
-        return Pair(null, "paket depan tidak terbaca: $last")
     }
 
-    // Force stop satu aplikasi, tanpa animasi. Hanya untuk aplikasi yang dicentang.
+    // ---------------------------------------------------------------
+    // Bersihkan aplikasi (tanpa animasi)
+    // ---------------------------------------------------------------
+
+    // Force stop satu aplikasi. Hanya untuk aplikasi yang dicentang.
     fun forceStop(pkg: String): Boolean {
         if (!hasPermission()) return false
-        if (!Regex("[A-Za-z0-9_.]+").matches(pkg)) return false
+        if (!validPkg(pkg)) return false
         return try {
             run(arrayOf("am", "force-stop", pkg)).first == 0
         } catch (e: Throwable) {
@@ -163,11 +181,11 @@ object ShizukuHelper {
         }
     }
 
-    // Hapus kartu aplikasi dari recent apps, tanpa animasi.
+    // Hapus kartu aplikasi dari recent apps.
     // Hasil: (berhasil, keterangan untuk log)
     fun removeFromRecents(pkg: String): Pair<Boolean, String> {
         if (!hasPermission()) return Pair(false, "Shizuku belum diizinkan")
-        if (!Regex("[A-Za-z0-9_.]+").matches(pkg)) return Pair(false, "nama paket tidak valid")
+        if (!validPkg(pkg)) return Pair(false, "nama paket tidak valid")
         var step = "mulai"
         return try {
             bypass()
@@ -218,49 +236,6 @@ object ShizukuHelper {
         } catch (e: Throwable) {
             val root = e.cause ?: e
             Pair(false, "gagal di langkah '$step': ${root.javaClass.simpleName} ${root.message ?: ""}")
-        }
-    }
-
-    private fun short(s: String): String {
-        val t = s.replace("\n", " ").trim()
-        if (t.isEmpty()) return "(kosong)"
-        return if (t.length > 160) t.substring(0, 160) + "..." else t
-    }
-
-    // Nyalakan layanan Aksesibilitas Project ats lewat Shizuku.
-    // Hasil: (berhasil, laporan lengkap untuk log)
-    fun enableAccessibility(): Pair<Boolean, String> {
-        if (!hasPermission()) return Pair(false, "Shizuku belum diizinkan")
-        return try {
-            val rep = StringBuilder()
-            val before = run(arrayOf("settings", "get", "secure", "enabled_accessibility_services"))
-            val cur = before.second
-            rep.append("sebelum=[").append(short(cur)).append("]")
-            if (before.third.isNotEmpty()) rep.append(" err=[").append(short(before.third)).append("]")
-
-            if (!cur.contains(SERVICE)) {
-                val v = if (cur.isBlank() || cur == "null") SERVICE else "$cur:$SERVICE"
-                val r1 = run(arrayOf("settings", "put", "secure", "enabled_accessibility_services", v))
-                rep.append(" | put layanan kode=").append(r1.first)
-                if (r1.third.isNotEmpty()) rep.append(" err=[").append(short(r1.third)).append("]")
-            } else {
-                rep.append(" | layanan sudah terdaftar")
-            }
-
-            val r2 = run(arrayOf("settings", "put", "secure", "accessibility_enabled", "1"))
-            rep.append(" | put aktif kode=").append(r2.first)
-            if (r2.third.isNotEmpty()) rep.append(" err=[").append(short(r2.third)).append("]")
-
-            val after = run(arrayOf("settings", "get", "secure", "enabled_accessibility_services"))
-            val flag = run(arrayOf("settings", "get", "secure", "accessibility_enabled"))
-            rep.append(" | sesudah=[").append(short(after.second)).append("]")
-            rep.append(" aktif=[").append(short(flag.second)).append("]")
-
-            val ok = after.second.contains(SERVICE) && flag.second.trim() == "1"
-            Pair(ok, rep.toString())
-        } catch (e: Throwable) {
-            val root = e.cause ?: e
-            Pair(false, "error: ${root.javaClass.simpleName} ${root.message ?: ""}")
         }
     }
 }
