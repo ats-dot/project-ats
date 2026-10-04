@@ -139,6 +139,22 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun clearLogs(): Boolean = RunnerService.clearAll()
 
+        // Hapus hanya sesi terakhir
+        @JavascriptInterface
+        fun clearLast(): Boolean = RunnerService.clearLastSession()
+
+        // Hapus satu sesi arsip (nomor mulai dari 0)
+        @JavascriptInterface
+        fun deleteSession(n: Int): Boolean = RunnerService.deleteSession(n)
+
+        // Hapus semua arsip
+        @JavascriptInterface
+        fun clearArchive(): Boolean = RunnerService.clearArchive()
+
+        // Hapus hanya daftar server
+        @JavascriptInterface
+        fun clearServers(): Boolean = RunnerService.clearServers()
+
         // Status jalan + log + server + status izin
         @JavascriptInterface
         fun status(): String {
