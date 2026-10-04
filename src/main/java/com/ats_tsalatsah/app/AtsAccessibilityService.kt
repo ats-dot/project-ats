@@ -21,23 +21,15 @@ class AtsAccessibilityService : AccessibilityService() {
         // Alasan kegagalan baca terakhir, dibaca RunnerService untuk log.
         @Volatile var lastReason: String = ""
 
-        // Keterangan baca teks terakhir yang berhasil (mode, arah, lama)
+        // Keterangan baca teks terakhir yang berhasil (arah, lama)
         @Volatile var lastOcrInfo: String = ""
-
-        // Arah putar yang terakhir berhasil, dicoba duluan berikutnya
-        @Volatile var bestAngle: Int = 0
 
         // Android membatasi screenshot aksesibilitas sekitar 1 per detik
         private const val MIN_GAP = 1100L
 
-        // Sisi terpanjang gambar mode layar penuh (cadangan)
-        private const val MAX_SIDE = 1000
-
         // Server valid
         private const val MIN_SERVER = 57092
         private const val MAX_SERVER = 57115
-
-        private val DEFAULT_ANGLES = intArrayOf(0, 90, 270, 180)
 
         private val recognizer by lazy {
             TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
@@ -78,52 +70,48 @@ class AtsAccessibilityService : AccessibilityService() {
             return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, true)
         }
 
-        // Pita sempit di sekitar baris "ZoneID" (kira-kira 40% lebar x 18% tinggi
-        // di tengah layar), resolusi asli tidak dikecilkan.
+        // Potong area di sekitar tulisan "ZoneID".
+        // Gambar mendatar: pita tengah. Gambar tegak: strip tengah.
         private fun cropBand(src: Bitmap): Bitmap {
-            val x = (src.width * 0.30f).toInt()
-            val y = (src.height * 0.39f).toInt()
-            val w = (src.width * 0.40f).toInt()
-            val h = (src.height * 0.18f).toInt()
-            if (w < 50 || h < 30 || x + w > src.width || y + h > src.height) return src
+            val landscape = src.width >= src.height
+            val x: Int
+            val y: Int
+            val w: Int
+            val h: Int
+            if (landscape) {
+                x = (src.width * 0.28f).toInt()
+                y = (src.height * 0.38f).toInt()
+                w = (src.width * 0.44f).toInt()
+                h = (src.height * 0.20f).toInt()
+            } else {
+                x = (src.width * 0.40f).toInt()
+                y = (src.height * 0.30f).toInt()
+                w = (src.width * 0.24f).toInt()
+                h = (src.height * 0.42f).toInt()
+            }
+            if (w < 30 || h < 30 || x + w > src.width || y + h > src.height) return src
             return Bitmap.createBitmap(src, x, y, w, h)
         }
 
-        // Mode layar penuh (cadangan): kecilkan saja
-        private fun shrink(src: Bitmap): Bitmap {
-            val big = maxOf(src.width, src.height)
-            if (big <= MAX_SIDE) return src
-            val f = MAX_SIDE.toFloat() / big
-            val w = maxOf(1, (src.width * f).toInt())
-            val h = maxOf(1, (src.height * f).toInt())
-            return Bitmap.createScaledBitmap(src, w, h, true)
+        // Mendatar: tulisan sudah tegak (0). Tegak: tulisan miring (90, lalu 270).
+        private fun anglesFor(landscape: Boolean): IntArray {
+            return if (landscape) intArrayOf(0) else intArrayOf(90, 270)
         }
 
-        private fun angleOrder(): IntArray {
-            val b = bestAngle
-            val list = ArrayList<Int>()
-            list.add(b)
-            for (a in DEFAULT_ANGLES) {
-                if (a != b) list.add(a)
-            }
-            return list.toIntArray()
-        }
-
-        // OCR di beberapa arah. Kalau hasil sebuah arah KOSONG, berhenti
-        // (tidak ada teks di gambar, percuma memutar).
+        // OCR di beberapa arah sampai server ketemu
         private fun ocr(
             bmp: Bitmap, order: IntArray, idx: Int, seen: StringBuilder,
-            tag: String, callback: (Int?) -> Unit
+            callback: (Int?) -> Unit
         ) {
             if (idx >= order.size) {
-                lastReason = "OCR $tag jalan di ${order.size} arah, server tidak ketemu. Teks terbaca:" +
+                lastReason = "OCR jalan di ${order.size} arah, server tidak ketemu. Teks terbaca:" +
                     shortN(seen.toString(), 200)
                 callback(null)
                 return
             }
             val deg = order[idx]
             val t0 = SystemClock.uptimeMillis()
-            lastReason = "OCR $tag sedang di arah $deg (gambar ${bmp.width}x${bmp.height})" +
+            lastReason = "OCR sedang di arah $deg (gambar ${bmp.width}x${bmp.height})" +
                 (if (seen.isNotEmpty()) ", sebelumnya:" + shortN(seen.toString(), 200) else "")
 
             val rot: Bitmap
@@ -142,21 +130,13 @@ class AtsAccessibilityService : AccessibilityService() {
                         val ms = SystemClock.uptimeMillis() - t0
                         val s = pickServer(it.text)
                         if (s != null) {
-                            bestAngle = deg
-                            lastOcrInfo = "$tag, arah $deg, $ms ms"
+                            lastOcrInfo = "arah $deg, ${bmp.width}x${bmp.height}, $ms ms"
                             lastReason = ""
                             callback(s)
                         } else {
-                            val txt = it.text.trim()
-                            seen.append(" [").append(tag).append(" arah ").append(deg).append(", ")
+                            seen.append(" [arah ").append(deg).append(", ")
                                 .append(ms).append(" ms] ").append(shortN(it.text, 80))
-                            if (txt.length < 3) {
-                                lastReason = "OCR $tag: tidak ada teks di gambar." +
-                                    shortN(seen.toString(), 200)
-                                callback(null)
-                            } else {
-                                ocr(bmp, order, idx + 1, seen, tag, callback)
-                            }
+                            ocr(bmp, order, idx + 1, seen, callback)
                         }
                     }
                     .addOnFailureListener {
@@ -178,12 +158,12 @@ class AtsAccessibilityService : AccessibilityService() {
         }
 
         // Baca server dari sebuah gambar (mis. dari screencap Shizuku).
-        // full = false: hanya pita sempit, resolusi asli (cepat).
-        // full = true : seluruh layar, dikecilkan (cadangan).
-        fun ocrBitmap(bmp: Bitmap, full: Boolean, callback: (Int?) -> Unit) {
+        // Hanya area sekitar tulisan yang dibaca, resolusi asli.
+        fun ocrBitmap(bmp: Bitmap, callback: (Int?) -> Unit) {
             val s0 = SystemClock.uptimeMillis()
+            val landscape = bmp.width >= bmp.height
             val work = try {
-                if (full) shrink(bmp) else cropBand(bmp)
+                cropBand(bmp)
             } catch (e: Throwable) {
                 bmp
             }
@@ -193,10 +173,9 @@ class AtsAccessibilityService : AccessibilityService() {
                 } catch (e: Throwable) {
                 }
             }
-            val tag = if (full) "penuh" else "pita"
             val seen = StringBuilder()
             seen.append("(siapkan ").append(SystemClock.uptimeMillis() - s0).append(" ms)")
-            ocr(work, angleOrder(), 0, seen, tag) { r ->
+            ocr(work, anglesFor(landscape), 0, seen) { r ->
                 try {
                     if (!work.isRecycled) work.recycle()
                 } catch (e: Throwable) {
@@ -273,7 +252,7 @@ class AtsAccessibilityService : AccessibilityService() {
                         callback(null)
                         return
                     }
-                    ocrBitmap(bmp, true, callback)
+                    ocrBitmap(bmp, callback)
                 } catch (e: Exception) {
                     lastReason = "error olah gambar: " + (e.message ?: "?")
                     callback(null)
