@@ -1,6 +1,7 @@
 package com.ats_tsalatsah.app
 
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
@@ -8,6 +9,8 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.webkit.JavascriptInterface
+import android.webkit.JsResult
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import org.json.JSONArray
@@ -32,6 +35,40 @@ class MainActivity : Activity() {
         web.settings.domStorageEnabled = true
         web.settings.allowFileAccess = true
         web.webViewClient = WebViewClient()
+        web.webChromeClient = object : WebChromeClient() {
+            // Kotak konfirmasi dari halaman (confirm)
+            override fun onJsConfirm(
+                view: WebView?, url: String?, message: String?, result: JsResult
+            ): Boolean {
+                if (isFinishing) {
+                    result.cancel()
+                    return true
+                }
+                AlertDialog.Builder(this@MainActivity)
+                    .setMessage(message ?: "")
+                    .setPositiveButton("Ya") { _, _ -> result.confirm() }
+                    .setNegativeButton("Batal") { _, _ -> result.cancel() }
+                    .setOnCancelListener { result.cancel() }
+                    .show()
+                return true
+            }
+
+            // Pesan peringatan dari halaman (alert)
+            override fun onJsAlert(
+                view: WebView?, url: String?, message: String?, result: JsResult
+            ): Boolean {
+                if (isFinishing) {
+                    result.confirm()
+                    return true
+                }
+                AlertDialog.Builder(this@MainActivity)
+                    .setMessage(message ?: "")
+                    .setPositiveButton("OK") { _, _ -> result.confirm() }
+                    .setOnCancelListener { result.confirm() }
+                    .show()
+                return true
+            }
+        }
         web.addJavascriptInterface(Bridge(), "App")
         setContentView(web)
         web.loadUrl("file:///android_asset/index.html")
