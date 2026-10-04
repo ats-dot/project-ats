@@ -20,8 +20,8 @@ object ShizukuHelper {
     // Pesan server di logcat: "... ZoneID = 57098 stack: ..."
     private val ZONE = Regex("ZoneID\\s*=\\s*(\\d{5})", RegexOption.IGNORE_CASE)
 
-    // Jam di awal baris logcat: "MM-dd HH:mm:ss.SSS ..."
-    private val LOG_TIME = Regex("^\\d\\d-\\d\\d (\\d\\d:\\d\\d:\\d\\d\\.\\d{3})")
+    // Awal baris logcat (format threadtime): "MM-dd HH:mm:ss.SSS  PID  TID L ..."
+    private val LOG_HEAD = Regex("^\\d\\d-\\d\\d (\\d\\d:\\d\\d:\\d\\d\\.\\d{3})\\s+(\\d+)\\s+(\\d+)\\s")
 
     private fun bypass() {
         if (bypassed) return
@@ -82,56 +82,46 @@ object ShizukuHelper {
         return Triple(code, out.trim(), err.trim())
     }
 
-    private fun short(s: String): String {
-        val t = s.replace("\n", " ").trim()
-        if (t.isEmpty()) return "(kosong)"
-        return if (t.length > 160) t.substring(0, 160) + "..." else t
-    }
-
     // ---------------------------------------------------------------
-    // Baca server dari logcat (tanpa layar)
+    // Baca server dari logcat berdasarkan UID aplikasi
     // ---------------------------------------------------------------
 
-    // Cari nomor proses (PID) utama sebuah aplikasi.
-    // Hasil: (pid atau null, keterangan kalau gagal)
-    fun pidOf(pkg: String): Pair<Int?, String> {
-        if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
-        if (!validPkg(pkg)) return Pair(null, "nama paket tidak valid")
-        return try {
-            val r = run(arrayOf("pidof", pkg))
-            val pid = Regex("\\d+").find(r.second)?.value?.toIntOrNull()
-            if (pid != null) Pair(pid, "")
-            else Pair(null, "pidof kode=${r.first} keluaran=[${short(r.second)}] err=[${short(r.third)}]")
-        } catch (e: Throwable) {
-            val root = e.cause ?: e
-            Pair(null, "error pidof: ${root.javaClass.simpleName} ${root.message ?: ""}")
-        }
-    }
-
-    // Pembaca log yang mengalir (streaming) untuk SATU proses (PID).
+    // Pembaca log yang mengalir (streaming) untuk SATU aplikasi (UID).
     // Satu proses logcat jalan terus; tiap baris dibaca begitu muncul.
     // Hanya baris "ZoneID = N" dengan N di rentang 57092..57115 yang dicatat.
     // Baris lain langsung dibuang, hanya dihitung jumlahnya.
-    class ZoneStream(private val p: Process, val pid: Int) {
+    class ZoneStream(private val p: Process, val uid: Int) {
         @Volatile var zone: Int? = null
         @Volatile var foundUptime = 0L
         @Volatile var logTime = ""
+        @Volatile var linePid = ""
         @Volatile var lines = 0
         @Volatile var outOfRange = ""
+        @Volatile var head = ""
+        @Volatile var pids = ""
         @Volatile var ended = false
 
         init {
             val t = Thread {
                 try {
                     val r = p.inputStream.bufferedReader()
+                    val seen = LinkedHashSet<String>()
                     while (true) {
                         val line = r.readLine() ?: break
                         lines++
+                        if (lines == 1) {
+                            head = line.replace("\n", " ").trim().take(160)
+                        }
+                        val h = LOG_HEAD.find(line)
+                        if (h != null && seen.size < 6 && seen.add(h.groupValues[2])) {
+                            pids = seen.joinToString(",")
+                        }
                         if (zone != null) continue
                         val m = ZONE.find(line) ?: continue
                         val v = m.groupValues[1].toInt()
                         if (v in 57092..57115) {
-                            logTime = LOG_TIME.find(line.trim())?.groupValues?.get(1) ?: ""
+                            logTime = h?.groupValues?.get(1) ?: ""
+                            linePid = h?.groupValues?.get(2) ?: ""
                             foundUptime = SystemClock.uptimeMillis()
                             zone = v
                         } else {
@@ -159,98 +149,20 @@ object ShizukuHelper {
         }
     }
 
-    // Buka pembaca log mengalir untuk satu PID.
+    // Buka pembaca log mengalir untuk satu UID, hanya log sejak sinceMs.
     // Hasil: (pembaca atau null, keterangan kalau gagal)
-    fun openZoneStream(pid: Int): Pair<ZoneStream?, String> {
+    fun openUidStream(uid: Int, sinceMs: Long): Pair<ZoneStream?, String> {
         if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
+        if (uid < 10000) return Pair(null, "UID tidak valid ($uid)")
         return try {
-            val p = start(arrayOf("sh", "-c", "exec logcat -v threadtime --pid=$pid 2>&1"))
-            Pair(ZoneStream(p, pid), "")
+            val t = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date(sinceMs))
+            val p = start(
+                arrayOf("sh", "-c", "exec logcat -v threadtime -T '$t' --uid=$uid 2>&1")
+            )
+            Pair(ZoneStream(p, uid), "")
         } catch (e: Throwable) {
             val root = e.cause ?: e
             Pair(null, "error buka logcat: ${root.javaClass.simpleName} ${root.message ?: ""}")
-        }
-    }
-
-    // Cari angka dari pesan "ZoneID = N". Hanya angka di rentang
-    // 57092..57115 yang diterima; kalau ada beberapa, diambil yang terakhir.
-    // Hasil: (angka valid atau null, catatan)
-    private fun pickZone(text: String): Pair<Int?, String> {
-        var valid: Int? = null
-        var other = ""
-        var n = 0
-        for (m in ZONE.findAll(text)) {
-            n++
-            val v = m.groupValues[1].toInt()
-            if (v in 57092..57115) valid = v else other = v.toString()
-        }
-        val note = if (valid == null && n > 0) "ada ZoneID di luar rentang ($other)" else ""
-        return Pair(valid, note)
-    }
-
-    // Cadangan (dipakai kalau PID tidak ketemu): baca logcat satu kali.
-    // - pid ada: hanya log milik proses itu.
-    // - pid null: log sejak waktu sinceMs (belum teruji).
-    // Hanya baris yang mengandung "ZoneID" yang dibawa ke aplikasi.
-    // Hasil: (angka atau null, keterangan untuk log)
-    fun readZoneId(pid: Int?, sinceMs: Long): Pair<Int?, String> {
-        if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
-        val cmd: String
-        val mode: String
-        if (pid != null) {
-            cmd = "L=\$(logcat -d --pid=$pid 2>&1); " +
-                "echo \"#N=\$(echo \"\$L\" | grep -c .)\"; " +
-                "echo \"\$L\" | grep ZoneID"
-            mode = "pid=$pid"
-        } else {
-            val t = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date(sinceMs))
-            cmd = "logcat -d -T '$t' | grep ZoneID"
-            mode = "sejak $t"
-        }
-        val t0 = System.nanoTime()
-        return try {
-            val r = run(arrayOf("sh", "-c", cmd))
-            val ms = (System.nanoTime() - t0) / 1_000_000
-
-            var body = r.second
-            var count = ""
-            if (pid != null) {
-                val nl = body.indexOf('\n')
-                val first = if (nl < 0) body else body.substring(0, nl)
-                if (first.startsWith("#N=")) {
-                    count = first.substring(3).trim()
-                    body = if (nl < 0) "" else body.substring(nl + 1)
-                }
-            }
-            val extra = "baca $ms ms" + (if (count.isEmpty()) "" else ", $count baris log")
-
-            val hit = pickZone(body)
-            if (hit.first != null) {
-                val line = body.lines().lastOrNull { ZONE.containsMatchIn(it) }
-                val jam = if (line == null) null else LOG_TIME.find(line.trim())?.groupValues?.get(1)
-                val jamNote = if (jam == null) "" else ", pesan jam $jam"
-                Pair(hit.first, "$mode, $extra$jamNote")
-            } else {
-                val err = if (r.third.isEmpty()) "" else " err=[${short(r.third)}]"
-                val note = if (hit.second.isEmpty()) "" else ", ${hit.second}"
-                Pair(null, "$mode: belum ada ZoneID valid (kode=${r.first}$note, $extra)$err")
-            }
-        } catch (e: Throwable) {
-            val root = e.cause ?: e
-            Pair(null, "error logcat: ${root.javaClass.simpleName} ${root.message ?: ""}")
-        }
-    }
-
-    // Hitung jumlah baris log milik sebuah proses (untuk diagnosa kalau gagal).
-    fun logLineCount(pid: Int): String {
-        if (!hasPermission()) return "Shizuku belum diizinkan"
-        return try {
-            val r = run(arrayOf("sh", "-c", "logcat -d --pid=$pid | wc -l"))
-            val n = r.second.trim()
-            if (r.first == 0 && n.isNotEmpty()) "$n baris" else "gagal kode=${r.first} err=[${short(r.third)}]"
-        } catch (e: Throwable) {
-            val root = e.cause ?: e
-            "error: ${root.javaClass.simpleName} ${root.message ?: ""}"
         }
     }
 
