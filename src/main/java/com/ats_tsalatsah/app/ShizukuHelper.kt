@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.IBinder
+import android.os.SystemClock
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 import rikka.shizuku.Shizuku
 import rikka.shizuku.ShizukuBinderWrapper
@@ -107,6 +108,70 @@ object ShizukuHelper {
         }
     }
 
+    // Pembaca log yang mengalir (streaming) untuk SATU proses (PID).
+    // Satu proses logcat jalan terus; tiap baris dibaca begitu muncul.
+    // Hanya baris "ZoneID = N" dengan N di rentang 57092..57115 yang dicatat.
+    // Baris lain langsung dibuang, hanya dihitung jumlahnya.
+    class ZoneStream(private val p: Process, val pid: Int) {
+        @Volatile var zone: Int? = null
+        @Volatile var foundUptime = 0L
+        @Volatile var logTime = ""
+        @Volatile var lines = 0
+        @Volatile var outOfRange = ""
+        @Volatile var ended = false
+
+        init {
+            val t = Thread {
+                try {
+                    val r = p.inputStream.bufferedReader()
+                    while (true) {
+                        val line = r.readLine() ?: break
+                        lines++
+                        if (zone != null) continue
+                        val m = ZONE.find(line) ?: continue
+                        val v = m.groupValues[1].toInt()
+                        if (v in 57092..57115) {
+                            logTime = LOG_TIME.find(line.trim())?.groupValues?.get(1) ?: ""
+                            foundUptime = SystemClock.uptimeMillis()
+                            zone = v
+                        } else {
+                            outOfRange = v.toString()
+                        }
+                    }
+                } catch (e: Throwable) {
+                }
+                ended = true
+            }
+            t.isDaemon = true
+            t.start()
+        }
+
+        // Hentikan proses logcat
+        fun close() {
+            try {
+                p.destroy()
+            } catch (e: Throwable) {
+            }
+            try {
+                p.inputStream.close()
+            } catch (e: Throwable) {
+            }
+        }
+    }
+
+    // Buka pembaca log mengalir untuk satu PID.
+    // Hasil: (pembaca atau null, keterangan kalau gagal)
+    fun openZoneStream(pid: Int): Pair<ZoneStream?, String> {
+        if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
+        return try {
+            val p = start(arrayOf("sh", "-c", "exec logcat -v threadtime --pid=$pid 2>&1"))
+            Pair(ZoneStream(p, pid), "")
+        } catch (e: Throwable) {
+            val root = e.cause ?: e
+            Pair(null, "error buka logcat: ${root.javaClass.simpleName} ${root.message ?: ""}")
+        }
+    }
+
     // Cari angka dari pesan "ZoneID = N". Hanya angka di rentang
     // 57092..57115 yang diterima; kalau ada beberapa, diambil yang terakhir.
     // Hasil: (angka valid atau null, catatan)
@@ -123,13 +188,11 @@ object ShizukuHelper {
         return Pair(valid, note)
     }
 
-    // Baca logcat satu kali dan cari "ZoneID = N".
-    // - pid ada: hanya log milik proses itu (aplikasi yang dicentang).
-    //   Perintah juga menghitung jumlah baris log proses (untuk diagnosa).
-    // - pid null: cadangan, log sejak waktu sinceMs (belum teruji).
+    // Cadangan (dipakai kalau PID tidak ketemu): baca logcat satu kali.
+    // - pid ada: hanya log milik proses itu.
+    // - pid null: log sejak waktu sinceMs (belum teruji).
     // Hanya baris yang mengandung "ZoneID" yang dibawa ke aplikasi.
     // Hasil: (angka atau null, keterangan untuk log)
-    // Keterangan berisi lama baca, jumlah baris log, dan jam pesan di logcat.
     fun readZoneId(pid: Int?, sinceMs: Long): Pair<Int?, String> {
         if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
         val cmd: String
