@@ -19,6 +19,9 @@ object ShizukuHelper {
     // Pesan server di logcat: "... ZoneID = 57098 stack: ..."
     private val ZONE = Regex("ZoneID\\s*=\\s*(\\d{5})", RegexOption.IGNORE_CASE)
 
+    // Jam di awal baris logcat: "MM-dd HH:mm:ss.SSS ..."
+    private val LOG_TIME = Regex("^\\d\\d-\\d\\d (\\d\\d:\\d\\d:\\d\\d\\.\\d{3})")
+
     private fun bypass() {
         if (bypassed) return
         try {
@@ -122,30 +125,52 @@ object ShizukuHelper {
 
     // Baca logcat satu kali dan cari "ZoneID = N".
     // - pid ada: hanya log milik proses itu (aplikasi yang dicentang).
+    //   Perintah juga menghitung jumlah baris log proses (untuk diagnosa).
     // - pid null: cadangan, log sejak waktu sinceMs (belum teruji).
     // Hanya baris yang mengandung "ZoneID" yang dibawa ke aplikasi.
     // Hasil: (angka atau null, keterangan untuk log)
+    // Keterangan berisi lama baca, jumlah baris log, dan jam pesan di logcat.
     fun readZoneId(pid: Int?, sinceMs: Long): Pair<Int?, String> {
         if (!hasPermission()) return Pair(null, "Shizuku belum diizinkan")
         val cmd: String
         val mode: String
         if (pid != null) {
-            cmd = "logcat -d --pid=$pid | grep ZoneID"
+            cmd = "L=\$(logcat -d --pid=$pid 2>&1); " +
+                "echo \"#N=\$(echo \"\$L\" | grep -c .)\"; " +
+                "echo \"\$L\" | grep ZoneID"
             mode = "pid=$pid"
         } else {
             val t = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US).format(Date(sinceMs))
             cmd = "logcat -d -T '$t' | grep ZoneID"
             mode = "sejak $t"
         }
+        val t0 = System.nanoTime()
         return try {
             val r = run(arrayOf("sh", "-c", cmd))
-            val hit = pickZone(r.second)
+            val ms = (System.nanoTime() - t0) / 1_000_000
+
+            var body = r.second
+            var count = ""
+            if (pid != null) {
+                val nl = body.indexOf('\n')
+                val first = if (nl < 0) body else body.substring(0, nl)
+                if (first.startsWith("#N=")) {
+                    count = first.substring(3).trim()
+                    body = if (nl < 0) "" else body.substring(nl + 1)
+                }
+            }
+            val extra = "baca $ms ms" + (if (count.isEmpty()) "" else ", $count baris log")
+
+            val hit = pickZone(body)
             if (hit.first != null) {
-                Pair(hit.first, mode)
+                val line = body.lines().lastOrNull { ZONE.containsMatchIn(it) }
+                val jam = if (line == null) null else LOG_TIME.find(line.trim())?.groupValues?.get(1)
+                val jamNote = if (jam == null) "" else ", pesan jam $jam"
+                Pair(hit.first, "$mode, $extra$jamNote")
             } else {
                 val err = if (r.third.isEmpty()) "" else " err=[${short(r.third)}]"
                 val note = if (hit.second.isEmpty()) "" else ", ${hit.second}"
-                Pair(null, "$mode: belum ada ZoneID valid (kode=${r.first}$note)$err")
+                Pair(null, "$mode: belum ada ZoneID valid (kode=${r.first}$note, $extra)$err")
             }
         } catch (e: Throwable) {
             val root = e.cause ?: e
