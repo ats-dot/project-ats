@@ -139,22 +139,6 @@ class RunnerService : Service() {
         }
     }
 
-    // Hasil membaca satu aplikasi: server (atau null), PID, dan pembaca log
-    // yang sengaja dibiarkan hidup kalau server belum terbaca.
-    private class ReadResult(
-        val zone: Int?,
-        val pid: Int?,
-        val stream: ShizukuHelper.ZoneStream?
-    )
-
-    // Aplikasi yang belum terbaca dan ditinggalkan dulu (belum dibersihkan)
-    private class Pending(
-        val pkg: String,
-        val pid: Int?,
-        val stream: ShizukuHelper.ZoneStream?,
-        val t0: Long
-    )
-
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var stopRequested = false
     private var capsule: TextView? = null
@@ -286,30 +270,33 @@ class RunnerService : Service() {
         th.start()
     }
 
-    // Baca server dari logcat, selama jatah waktu aplikasi ini.
-    // 1) Cari PID aplikasi (diulang sampai ketemu).
-    // 2) Buka pembaca log yang mengalir untuk PID itu, cek hasilnya tiap ~20 ms.
-    // Cadangan: kalau PID belum ketemu setelah 2500 ms (atau pembaca log gagal
-    // dibuka 3 kali), baca log satu-satu (hanya angka server valid).
-    // Kalau server belum ketemu sampai jatah habis, pembaca log DIBIARKAN HIDUP
-    // dan dikembalikan ke pemanggil supaya bisa dicek lagi nanti.
-    private fun readUntil(pkg: String, t0: Long, wall: Long, deadline: Long): ReadResult {
-        var pid: Int? = null
+    // Baca server dari logcat berdasarkan UID aplikasi, selama jatah waktunya.
+    // Pembaca log dibuka segera, dicek tiap ~20 ms. Kalau gagal dibuka,
+    // dicoba ulang maksimal 3 kali. Tidak ada cadangan lain.
+    // Hasil: nomor server, atau null kalau tidak terbaca.
+    private fun readUntil(pkg: String, uid: Int, t0: Long, wall: Long, deadline: Long): Int? {
         var stream: ShizukuHelper.ZoneStream? = null
         var opens = 0
-        var fbTries = 0
         var lastLines = 0
+        var lastHead = ""
+        var lastPids = ""
+        var lastOut = ""
         val reasons = ArrayList<String>()
-        var keep: ShizukuHelper.ZoneStream? = null
 
         fun reason(s: String) {
-            if (reasons.size < 4 && !reasons.contains(s)) reasons.add(s)
+            if (reasons.size < 5 && !reasons.contains(s)) reasons.add(s)
+        }
+
+        fun remember(st: ShizukuHelper.ZoneStream) {
+            lastLines = st.lines
+            lastHead = st.head
+            lastPids = st.pids
+            lastOut = st.outOfRange
         }
 
         try {
             while (!stopRequested) {
-                val now = SystemClock.uptimeMillis()
-                val left = deadline - now
+                val left = deadline - SystemClock.uptimeMillis()
                 if (left <= 0) break
 
                 val st = stream
@@ -317,116 +304,71 @@ class RunnerService : Service() {
                     val z = st.zone
                     if (z != null) {
                         val at = st.foundUptime - t0
-                        val jam = if (st.logTime.isEmpty()) "" else ", pesan jam ${st.logTime}"
-                        addLog("Baca log OK: server $z ketemu di $at ms (stream pid=${st.pid}$jam, ${st.lines} baris dibaca)")
-                        return ReadResult(z, pid, null)
+                        val jam = if (st.logTime.isEmpty()) "-" else st.logTime
+                        val wp = if (st.linePid.isEmpty()) "-" else st.linePid
+                        addLog("Baca log OK: server $z ketemu di $at ms (uid=$uid, pid penulis=$wp, jam pesan $jam, baris dibaca ${st.lines})")
+                        closeAsync(st)
+                        stream = null
+                        return z
                     }
                     if (st.ended) {
-                        reason("stream log berakhir sendiri (${st.lines} baris)")
-                        lastLines = st.lines
+                        remember(st)
+                        reason("pembaca log berakhir sendiri (${st.lines} baris)")
                         closeAsync(st)
                         stream = null
                     } else {
                         sleepMs(minOf(20L, left))
-                        continue
                     }
+                    continue
                 }
 
                 // Belum ada pembaca log yang jalan
-                val curPid = pid
-                if (curPid == null) {
-                    if (left >= 100L) {
-                        val pr = limited(minOf(left - 50L, 1200L), Pair<Int?, String>(null, "terlalu lama")) {
-                            ShizukuHelper.pidOf(pkg)
-                        }
-                        if (pr.first != null) {
-                            pid = pr.first
-                            addLog("PID $pkg = ${pr.first}, ketemu di ${SystemClock.uptimeMillis() - t0} ms")
-                            continue
-                        } else {
-                            reason("PID: " + pr.second)
-                        }
-                    }
-                    // PID belum ketemu: cadangan setelah 2500 ms
-                    val left2 = deadline - SystemClock.uptimeMillis()
-                    if ((SystemClock.uptimeMillis() - t0) >= 2500L && left2 >= 300L) {
-                        fbTries++
-                        val res = limited(minOf(left2 - 50L, 1500L), Pair<Int?, String>(null, "terlalu lama")) {
-                            ShizukuHelper.readZoneId(null, wall - 300L)
-                        }
-                        if (res.first != null) {
-                            val at = SystemClock.uptimeMillis() - t0
-                            addLog("Baca log OK (cadangan): server ${res.first} ketemu di $at ms, percobaan ke-$fbTries (${res.second})")
-                            return ReadResult(res.first, pid, null)
-                        }
-                        reason(res.second)
-                    }
-                    sleepMs(minOf(100L, maxOf(deadline - SystemClock.uptimeMillis(), 0L)))
-                } else if (opens < 3) {
-                    opens++
-                    val o = limited(minOf(left - 20L, 1000L).coerceAtLeast(50L),
-                        Pair<ShizukuHelper.ZoneStream?, String>(null, "terlalu lama")) {
-                        ShizukuHelper.openZoneStream(curPid)
-                    }
-                    if (o.first != null) {
-                        stream = o.first
-                        addLog("Stream log dibuka di ${SystemClock.uptimeMillis() - t0} ms (pid=$curPid)")
-                    } else {
-                        reason("buka stream: " + o.second)
-                        sleepMs(minOf(100L, maxOf(deadline - SystemClock.uptimeMillis(), 0L)))
-                    }
+                if (opens >= 3) {
+                    reason("gagal dibuka 3 kali, tidak dicoba lagi")
+                    sleepUntil(deadline)
+                    break
+                }
+                opens++
+                val o = limited(
+                    minOf(left - 20L, 1000L).coerceAtLeast(50L),
+                    Pair<ShizukuHelper.ZoneStream?, String>(null, "terlalu lama")
+                ) {
+                    ShizukuHelper.openUidStream(uid, wall - 300L)
+                }
+                if (o.first != null) {
+                    stream = o.first
+                    addLog("Pembaca log dibuka di ${SystemClock.uptimeMillis() - t0} ms (uid=$uid, percobaan ke-$opens)")
                 } else {
-                    // Pembaca log gagal 3 kali: baca satu-satu dengan PID
-                    if (left >= 300L) {
-                        fbTries++
-                        val res = limited(minOf(left - 50L, 1500L), Pair<Int?, String>(null, "terlalu lama")) {
-                            ShizukuHelper.readZoneId(curPid, wall - 300L)
-                        }
-                        if (res.first != null) {
-                            val at = SystemClock.uptimeMillis() - t0
-                            addLog("Baca log OK (cadangan): server ${res.first} ketemu di $at ms, percobaan ke-$fbTries (${res.second})")
-                            return ReadResult(res.first, pid, null)
-                        }
-                        reason(res.second)
-                    }
+                    reason("buka pembaca log: " + o.second)
                     sleepMs(minOf(100L, maxOf(deadline - SystemClock.uptimeMillis(), 0L)))
                 }
             }
         } finally {
             val s = stream
             if (s != null) {
-                lastLines = s.lines
-                if (!stopRequested && s.zone == null && !s.ended) {
-                    // Biarkan hidup, dicek lagi nanti
-                    keep = s
-                } else {
-                    closeAsync(s)
-                }
+                remember(s)
+                closeAsync(s)
             }
         }
 
-        addLog(
-            "Baca log: stream dibuka $opens kali, server belum ketemu dalam jatah" +
-                (if (pid != null) " (PID $pid)" else " (PID tidak ketemu)")
-        )
-        for (r in reasons) addLog("  alasan: $r")
-        if (opens > 0) addLog("  baris log dibaca: $lastLines")
-        return ReadResult(null, pid, keep)
+        if (!stopRequested) {
+            addLog("Baca log gagal: server tidak terbaca (uid=$uid, dibuka $opens kali, baris dibaca $lastLines)")
+            addLog("  baris pertama keluaran: " + (if (lastHead.isEmpty()) "(kosong)" else lastHead))
+            addLog("  PID terlihat: " + (if (lastPids.isEmpty()) "(tidak ada)" else lastPids))
+            if (lastOut.isNotEmpty()) addLog("  angka di luar rentang: $lastOut")
+            for (r in reasons) addLog("  alasan: $r")
+        }
+        return null
     }
 
     // Force stop + buang kartu dari recent apps lewat Shizuku, tanpa animasi.
-    // home = true: pindah ke home dulu (seperti sebelumnya).
-    // home = false: langsung bersihkan (dipakai untuk aplikasi yang
-    // ditinggalkan, supaya aplikasi yang sedang tampil tidak terganggu).
-    private fun dismiss(pkg: String, home: Boolean = true) {
+    private fun dismiss(pkg: String) {
         if (!ShizukuHelper.hasPermission()) {
             addLog("Shizuku belum aktif/diizinkan, $pkg tidak dibersihkan")
             return
         }
-        if (home) {
-            goHome()
-            Thread.sleep(200)
-        }
+        goHome()
+        Thread.sleep(200)
         val ok = ShizukuHelper.forceStop(pkg)
         addLog(if (ok) "Force stop $pkg berhasil" else "Force stop $pkg gagal")
         val r = ShizukuHelper.removeFromRecents(pkg)
@@ -438,7 +380,6 @@ class RunnerService : Service() {
         found = 0
         total = pkgs.size
         val map = LinkedHashMap<Int, String>()
-        val pending = ArrayList<Pending>()
         setServers(map)
 
         addLog("$MARK ${dateFmt.format(Date())} =====")
@@ -452,47 +393,6 @@ class RunnerService : Service() {
             return
         }
 
-        // Cek aplikasi yang ditinggalkan (belum terbaca).
-        // final = false: hanya lihat hasil stream yang sudah masuk.
-        // final = true : cek terakhir (baca ulang logcat), sisanya dibersihkan.
-        fun checkPending(final: Boolean) {
-            for (p in ArrayList(pending)) {
-                if (stopRequested) break
-                var z: Int? = p.stream?.zone
-                var how = ""
-                if (z != null) {
-                    val st = p.stream!!
-                    val jam = if (st.logTime.isEmpty()) "" else ", pesan jam ${st.logTime}"
-                    how = "${st.foundUptime - p.t0} ms setelah dibuka (stream$jam)"
-                } else if (final && p.pid != null) {
-                    val res = limited<Pair<Int?, String>>(1800L, Pair(null, "terlalu lama")) {
-                        ShizukuHelper.readZoneId(p.pid, 0L)
-                    }
-                    z = res.first
-                    if (z != null) how = "lewat baca ulang logcat (${res.second})"
-                }
-                if (z != null) {
-                    pending.remove(p)
-                    closeAsync(p.stream)
-                    addLog("Ketemu belakangan: server $z (${p.pkg}), $how")
-                    if (map.containsKey(z)) {
-                        addLog("Server $z sudah ada, bersihkan ${p.pkg}")
-                        dismiss(p.pkg, false)
-                    } else {
-                        map[z] = p.pkg
-                        found = map.size
-                        setServers(map)
-                        addLog("Server $z dicatat (${p.pkg})")
-                    }
-                } else if (final) {
-                    pending.remove(p)
-                    closeAsync(p.stream)
-                    addLog("Tetap tidak terbaca, bersihkan ${p.pkg}")
-                    dismiss(p.pkg, false)
-                }
-            }
-        }
-
         // Putaran 1: tiap aplikasi dapat jatah waktu tetap (jeda 1)
         phase = "Putaran 1"
         addLog("Mulai putaran 1 (${pkgs.size} aplikasi)")
@@ -502,6 +402,16 @@ class RunnerService : Service() {
                 addLog("Target $target server tercapai, sisa aplikasi dilewati")
                 break
             }
+
+            // UID diambil sebelum aplikasi dibuka (cepat, tanpa Shizuku)
+            var uid = -1
+            var uidErr = ""
+            try {
+                uid = packageManager.getApplicationInfo(pkg, 0).uid
+            } catch (e: Throwable) {
+                uidErr = e.javaClass.simpleName + " " + (e.message ?: "")
+            }
+
             val wall = System.currentTimeMillis()
             val t0 = SystemClock.uptimeMillis()
             if (!launch(pkg)) {
@@ -510,21 +420,32 @@ class RunnerService : Service() {
                 continue
             }
             addLog("Buka $pkg")
+            if (uid >= 0) {
+                addLog("UID $pkg = $uid")
+            } else {
+                addLog("UID $pkg tidak bisa diambil: $uidErr")
+            }
+
             val deadline = t0 + d1
-            val r = readUntil(pkg, t0, wall, deadline)
+            val s: Int? = if (uid >= 0) readUntil(pkg, uid, t0, wall, deadline) else null
             // Walau sudah terbaca, tetap tunggu sampai jatah habis
             sleepUntil(deadline)
 
-            val s = r.zone
-            if (s == null) {
-                // Belum terbaca: jangan dibersihkan dulu, lanjut ke aplikasi berikutnya
-                addLog("Server belum terbaca, $pkg ditinggalkan dulu (dicek lagi nanti)")
-                pending.add(Pending(pkg, r.pid, r.stream, t0))
-            } else if (map.containsKey(s)) {
-                addLog("Server $s sudah ada, bersihkan $pkg")
+            if (s != null && !map.containsKey(s)) {
+                // Server baru: dicatat, TIDAK dibersihkan
+                map[s] = pkg
+                found = map.size
+                setServers(map)
+                addLog("Server $s dicatat ($pkg)")
+            } else {
+                if (s == null) {
+                    addLog("Server tidak terbaca, bersihkan $pkg")
+                } else {
+                    addLog("Server $s sudah ada, bersihkan $pkg")
+                }
                 if (!stopRequested) {
                     val c0 = SystemClock.uptimeMillis()
-                    dismiss(pkg, true)
+                    dismiss(pkg)
                     val used = SystemClock.uptimeMillis() - c0
                     if (used > d3) {
                         addLog("Pembersihan butuh $used ms, melebihi jeda tengah $d3 ms")
@@ -532,27 +453,10 @@ class RunnerService : Service() {
                         sleepUntil(c0 + d3)
                     }
                 }
-            } else {
-                map[s] = pkg
-                found = map.size
-                setServers(map)
-                addLog("Server $s dicatat ($pkg)")
             }
             val total1 = SystemClock.uptimeMillis() - t0
             addLog("Waktu aplikasi ini: $total1 ms")
             done++
-
-            // Lihat apakah ada aplikasi tertinggal yang ZoneID-nya muncul belakangan
-            if (!stopRequested) checkPending(false)
-        }
-
-        // Akhir putaran 1: cek terakhir untuk aplikasi yang masih tertinggal
-        if (stopRequested) {
-            for (p in pending) closeAsync(p.stream)
-            pending.clear()
-        } else if (pending.isNotEmpty()) {
-            addLog("Cek terakhir ${pending.size} aplikasi yang belum terbaca")
-            checkPending(true)
         }
 
         // Putaran 2
