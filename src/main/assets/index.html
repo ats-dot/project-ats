@@ -131,7 +131,10 @@ nav button.on{background:#fff;color:#000}
   </div>
   <div id="vlog">
     <div class="card">
-      <h2>Server didapat (<span id="scount">0</span>)</h2>
+      <div class="row" style="justify-content:space-between;margin-bottom:10px">
+        <h2 style="margin:0">Server didapat (<span id="scount">0</span>)</h2>
+        <button class="btn sm o" id="bdsrv">Hapus</button>
+      </div>
       <div class="mono" id="srv">Belum ada server.</div>
     </div>
     <div class="card">
@@ -143,6 +146,9 @@ nav button.on{background:#fff;color:#000}
     </div>
   </div>
   <div id="varc" style="display:none">
+    <div class="row" style="justify-content:flex-end;margin-bottom:10px">
+      <button class="btn sm o" id="bdarc">Hapus semua arsip</button>
+    </div>
     <div id="arc"><div class="card">Belum ada arsip.</div></div>
   </div>
 </section>
@@ -278,16 +284,24 @@ $("bstop").onclick=function(){try{A.stop()}catch(e){}};
 $("bov").onclick=function(){try{A.overlay()}catch(e){}};
 $("bba").onclick=function(){try{A.battery()}catch(e){}};
 $("bsz").onclick=function(){try{A.shizuku()}catch(e){}};
-$("bdel").onclick=function(){
-  if(!confirm("Hapus semua log, arsip, dan daftar server?"))return;
+
+// Tombol hapus: tanya dulu, jalankan, lalu segarkan tampilan
+function doDel(msg,fn){
+  if(!confirm(msg))return;
   var ok=true;
-  try{ok=A.clearLogs()}catch(e){}
+  try{ok=fn()}catch(e){}
   if(!ok){alert("Tidak bisa dihapus saat sedang berjalan. Hentikan dulu.");return}
   lastLogKey="";openArc={};
-  $("log").textContent="Belum ada aktivitas.";
-  $("srv").textContent="Belum ada server.";
-  $("scount").textContent="0";
-  $("arc").innerHTML='<div class="card">Belum ada arsip.</div>';
+  poll();
+}
+$("bdel").onclick=function(){
+  doDel("Hapus sesi terakhir? Arsip dan daftar server tidak ikut terhapus.",function(){return A.clearLast()});
+};
+$("bdsrv").onclick=function(){
+  doDel("Hapus daftar server? Log dan arsip tidak ikut terhapus.",function(){return A.clearServers()});
+};
+$("bdarc").onclick=function(){
+  doDel("Hapus semua arsip? Sesi terakhir tetap ada.",function(){return A.clearArchive()});
 };
 
 function sub(n){
@@ -334,6 +348,13 @@ function countSrv(rows){
 }
 
 function renderLog(lines){
+  if(!lines.length){
+    if(lastLogKey==="kosong")return;
+    lastLogKey="kosong";
+    $("log").textContent="Belum ada aktivitas.";
+    $("arc").innerHTML='<div class="card">Belum ada arsip.</div>';
+    return;
+  }
   var key=lines.length+"|"+lines[0]+"|"+lines[lines.length-1];
   if(key===lastLogKey)return;
   lastLogKey=key;
@@ -350,15 +371,21 @@ function renderLog(lines){
     var dd=dateOf(s.head);
     var when=dd||("tanggal tidak tercatat"+(timeOf(s.head)?" ("+timeOf(s.head)+")":""));
     var b=s.rows.slice().reverse().map(esc).join("\n");
-    h+='<div class="arc'+(openArc[i]?" open":"")+'" data-i="'+i+'"><div class="hd"><b>Sesi '+(i+1)+'</b><small>'+esc(when)+'</small><small>'+countApk(s.rows)+' apk dibuka &middot; '+countSrv(s.rows)+' server didapat</small></div><div class="bd mono">'+(b||"(kosong)")+'</div></div>';
+    h+='<div class="arc'+(openArc[i]?" open":"")+'" data-i="'+i+'"><div class="hd"><b>Sesi '+(i+1)+'</b><small>'+esc(when)+'</small><small>'+countApk(s.rows)+' apk dibuka &middot; '+countSrv(s.rows)+' server didapat</small></div><div class="bd"><button class="btn sm o delses" data-i="'+i+'">Hapus sesi ini</button><div class="mono" style="margin-top:10px">'+(b||"(kosong)")+'</div></div></div>';
   }
   $("arc").innerHTML=h||'<div class="card">Belum ada arsip.</div>';
 }
 $("arc").addEventListener("click",function(e){
-  var el=e.target;
+  var t=e.target;
+  if(t.classList&&t.classList.contains("delses")){
+    var n=parseInt(t.getAttribute("data-i"),10);
+    doDel("Hapus Sesi "+(n+1)+" dari arsip?",function(){return A.deleteSession(n)});
+    return;
+  }
+  var el=t;
   while(el&&el!==this&&!(el.classList&&el.classList.contains("arc")))el=el.parentNode;
   if(!el||el===this)return;
-  if(e.target.closest&&e.target.closest(".bd"))return;
+  if(t.closest&&t.closest(".bd"))return;
   var i=el.getAttribute("data-i");
   var o=!el.classList.contains("open");
   el.classList.toggle("open",o);
@@ -384,10 +411,14 @@ function poll(){
   $("d_sz").className="dot"+(s.shizuku?" ok":"");
   $("p_ov").className="dot"+(s.overlay?" ok":"");
   $("p_sz").className="dot"+(s.shizuku?" ok":"");
-  if(s.logs&&s.logs.length)renderLog(s.logs);
-  if(s.servers&&s.servers.length){
-    $("srv").textContent=s.servers.join("\n");
-    $("scount").textContent=s.servers.length;
+  renderLog(s.logs||[]);
+  var sv=s.servers||[];
+  if(sv.length){
+    $("srv").textContent=sv.join("\n");
+    $("scount").textContent=sv.length;
+  }else{
+    $("srv").textContent="Belum ada server.";
+    $("scount").textContent="0";
   }
 }
 
