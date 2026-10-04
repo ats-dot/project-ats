@@ -82,7 +82,6 @@ nav button.on{background:#fff;color:#000}
     <div class="card">
       <div class="row" style="justify-content:space-between">
         <span class="pill"><span class="dot" id="p_sz"></span>Shizuku</span>
-        <span class="pill"><span class="dot" id="p_ac"></span>Aksesibilitas</span>
         <span class="pill"><span class="dot" id="p_ov"></span>Di atas app</span>
       </div>
     </div>
@@ -155,9 +154,6 @@ nav button.on{background:#fff;color:#000}
     <label>Jeda putaran 1 (jatah waktu tiap aplikasi)</label>
     <input type="number" id="d1" inputmode="numeric">
     <div class="hint" id="h1"></div>
-    <label>Mulai baca layar (dihitung dari aplikasi dibuka)</label>
-    <input type="number" id="rs" inputmode="numeric">
-    <div class="hint" id="h4"></div>
     <label>Jeda putaran 2</label>
     <input type="number" id="d2" inputmode="numeric">
     <div class="hint" id="h2"></div>
@@ -171,10 +167,9 @@ nav button.on{background:#fff;color:#000}
   <div class="card">
     <h2>Izin</h2>
     <div class="st"><span><span class="dot" id="d_ov"></span>&nbsp; Tampil di atas aplikasi lain</span><button class="btn sm" id="bov">Atur</button></div>
-    <div class="st"><span><span class="dot" id="d_ac"></span>&nbsp; Aksesibilitas (baca layar)</span><button class="btn sm" id="bac">Atur</button></div>
-    <div class="st"><span><span class="dot" id="d_sz"></span>&nbsp; Shizuku (force stop)</span><button class="btn sm" id="bsz">Atur</button></div>
+    <div class="st"><span><span class="dot" id="d_sz"></span>&nbsp; Shizuku (baca log + force stop)</span><button class="btn sm" id="bsz">Atur</button></div>
     <div class="st"><span>Penghemat baterai</span><button class="btn sm o" id="bba">Atur</button></div>
-    <div style="color:#888;font-size:12px;margin-top:8px">Pembacaan layar dan force stop hanya berlaku untuk aplikasi yang kamu centang.</div>
+    <div style="color:#888;font-size:12px;margin-top:8px">Pembacaan log dan force stop hanya berlaku untuk aplikasi yang kamu centang.</div>
   </div>
 </section>
 
@@ -189,7 +184,7 @@ nav button.on{background:#fff;color:#000}
 var $=function(id){return document.getElementById(id)};
 var A=window.App;
 var apps=[], sel={}, shown=[], openArc={};
-var S={d1:"7450",d2:"6500",d3:"600",rs:"5000",target:"0",back:false,qf:""};
+var S={d1:"7450",d2:"6500",d3:"600",target:"0",back:false,qf:""};
 var lastLogKey="";
 var MARK="===== Sesi baru";
 var MON=["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
@@ -198,6 +193,7 @@ function load(){
   try{
     var s=JSON.parse(localStorage.getItem("ats_set")||"{}");
     for(var k in s)S[k]=s[k];
+    delete S.rs;
     sel=JSON.parse(localStorage.getItem("ats_sel")||"{}");
     if(localStorage.getItem("ats_v")!=="2"){
       S.d1="7450";S.d2="6500";
@@ -206,13 +202,12 @@ function load(){
     }
   }catch(e){}
   if(!S.d3)S.d3="600";
-  if(!S.rs)S.rs="5000";
-  $("d1").value=S.d1;$("d2").value=S.d2;$("d3").value=S.d3;$("rs").value=S.rs;$("target").value=S.target;
+  $("d1").value=S.d1;$("d2").value=S.d2;$("d3").value=S.d3;$("target").value=S.target;
   $("back").checked=!!S.back;$("qf").value=S.qf;
   hints();
 }
 function saveSet(){
-  S.d1=$("d1").value;S.d2=$("d2").value;S.d3=$("d3").value;S.rs=$("rs").value;S.target=$("target").value;
+  S.d1=$("d1").value;S.d2=$("d2").value;S.d3=$("d3").value;S.target=$("target").value;
   S.back=$("back").checked;S.qf=$("qf").value;
   try{localStorage.setItem("ats_set",JSON.stringify(S))}catch(e){}
   hints();
@@ -232,12 +227,8 @@ function hints(){
   $("h1").innerHTML=hintText($("d1").value);
   $("h2").innerHTML=hintText($("d2").value);
   $("h3").innerHTML=hintText($("d3").value);
-  var h4=hintText($("rs").value);
-  var a=Number($("rs").value),b=Number($("d1").value);
-  if(!isNaN(a)&&!isNaN(b)&&a>b-1500)h4+='<br><b>Catatan:</b> terlalu dekat dengan akhir jeda 1, akan dimajukan otomatis.';
-  $("h4").innerHTML=h4;
 }
-["d1","d2","d3","rs","target","qf"].forEach(function(id){$(id).addEventListener("input",saveSet)});
+["d1","d2","d3","target","qf"].forEach(function(id){$(id).addEventListener("input",saveSet)});
 $("back").addEventListener("change",saveSet);
 
 $("bminus").onclick=function(){var n=parseInt($("target").value||"0",10)||0;$("target").value=Math.max(0,n-1);saveSet()};
@@ -281,11 +272,10 @@ $("bstart").onclick=function(){
   var p=apps.filter(function(a){return sel[a.pkg]}).map(function(a){return a.pkg});
   if(!p.length){alert("Centang aplikasi dulu di tab Apps.");return}
   saveSet();
-  try{A.start(JSON.stringify(p),S.d1||"7450",S.d2||"6500",S.d3||"600",S.rs||"5000",S.target||"0",!!S.back)}catch(e){}
+  try{A.start(JSON.stringify(p),S.d1||"7450",S.d2||"6500",S.d3||"600",S.target||"0",!!S.back)}catch(e){}
 };
 $("bstop").onclick=function(){try{A.stop()}catch(e){}};
 $("bov").onclick=function(){try{A.overlay()}catch(e){}};
-$("bac").onclick=function(){try{A.access()}catch(e){}};
 $("bba").onclick=function(){try{A.battery()}catch(e){}};
 $("bsz").onclick=function(){try{A.shizuku()}catch(e){}};
 $("bdel").onclick=function(){
@@ -391,10 +381,8 @@ function poll(){
   var t=parseInt(S.target||"0",10)||0;
   $("tgt").textContent=t>0?t:"Bebas";
   $("d_ov").className="dot"+(s.overlay?" ok":"");
-  $("d_ac").className="dot"+(s.access?" ok":"");
   $("d_sz").className="dot"+(s.shizuku?" ok":"");
   $("p_ov").className="dot"+(s.overlay?" ok":"");
-  $("p_ac").className="dot"+(s.access?" ok":"");
   $("p_sz").className="dot"+(s.shizuku?" ok":"");
   if(s.logs&&s.logs.length)renderLog(s.logs);
   if(s.servers&&s.servers.length){
