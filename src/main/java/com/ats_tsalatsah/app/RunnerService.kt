@@ -257,80 +257,136 @@ class RunnerService : Service() {
         return res
     }
 
+    // Tutup pembaca log di latar belakang (tidak menunda waktu aplikasi)
+    private fun closeAsync(s: ShizukuHelper.ZoneStream) {
+        val th = Thread {
+            try {
+                s.close()
+            } catch (e: Throwable) {
+            }
+        }
+        th.isDaemon = true
+        th.start()
+    }
+
     // Baca server dari logcat, selama jatah waktu aplikasi ini.
-    // 1) Cari PID aplikasi (diulang tiap ~150 ms sampai ketemu).
-    // 2) Baca log milik PID itu tiap ~150 ms, cari "ZoneID = N".
-    // Cadangan: kalau PID belum ketemu setelah 2500 ms, baca log umum sejak
-    // aplikasi dibuka (hanya angka server yang valid yang diambil).
+    // 1) Cari PID aplikasi (diulang sampai ketemu).
+    // 2) Buka pembaca log yang mengalir untuk PID itu, cek hasilnya tiap ~20 ms.
+    // Cadangan: kalau PID belum ketemu setelah 2500 ms (atau pembaca log gagal
+    // dibuka 3 kali), baca log satu kali-satu kali (hanya angka server valid).
     // Begitu ketemu, berhenti. Sisa jatah ditunggu oleh pemanggil.
     private fun readUntil(pkg: String, t0: Long, wall: Long, deadline: Long): Int? {
         var pid: Int? = null
-        var tries = 0
-        var lastPidCheck = 0L
+        var stream: ShizukuHelper.ZoneStream? = null
+        var opens = 0
+        var fbTries = 0
+        var lastLines = 0
         val reasons = ArrayList<String>()
-        var diag = ""
-        var diagDone = false
 
-        while (!stopRequested) {
-            val now = SystemClock.uptimeMillis()
-            val left = deadline - now
-            if (left < 120) break
+        fun reason(s: String) {
+            if (reasons.size < 4 && !reasons.contains(s)) reasons.add(s)
+        }
 
-            // Cari atau segarkan PID
-            if (now - lastPidCheck >= (if (pid == null) 150L else 1500L)) {
-                lastPidCheck = now
-                val pr = limited(minOf(left - 50L, 1200L), Pair<Int?, String>(null, "terlalu lama")) {
-                    ShizukuHelper.pidOf(pkg)
-                }
-                if (pr.first != null) {
-                    if (pr.first != pid) {
-                        addLog("PID $pkg = ${pr.first}, ketemu di ${SystemClock.uptimeMillis() - t0} ms")
-                        pid = pr.first
+        try {
+            while (!stopRequested) {
+                val now = SystemClock.uptimeMillis()
+                val left = deadline - now
+                if (left <= 0) break
+
+                val st = stream
+                if (st != null) {
+                    val z = st.zone
+                    if (z != null) {
+                        val at = st.foundUptime - t0
+                        val jam = if (st.logTime.isEmpty()) "" else ", pesan jam ${st.logTime}"
+                        addLog("Baca log OK: server $z ketemu di $at ms (stream pid=${st.pid}$jam, ${st.lines} baris dibaca)")
+                        return z
                     }
-                } else if (pid == null) {
-                    val why = "PID: " + pr.second
-                    if (reasons.size < 3 && !reasons.contains(why)) reasons.add(why)
+                    if (st.ended) {
+                        reason("stream log berakhir sendiri (${st.lines} baris)")
+                        lastLines = st.lines
+                        closeAsync(st)
+                        stream = null
+                    } else {
+                        sleepMs(minOf(20L, left))
+                        continue
+                    }
+                }
+
+                // Belum ada pembaca log yang jalan
+                val curPid = pid
+                if (curPid == null) {
+                    if (left >= 100L) {
+                        val pr = limited(minOf(left - 50L, 1200L), Pair<Int?, String>(null, "terlalu lama")) {
+                            ShizukuHelper.pidOf(pkg)
+                        }
+                        if (pr.first != null) {
+                            pid = pr.first
+                            addLog("PID $pkg = ${pr.first}, ketemu di ${SystemClock.uptimeMillis() - t0} ms")
+                            continue
+                        } else {
+                            reason("PID: " + pr.second)
+                        }
+                    }
+                    // PID belum ketemu: cadangan setelah 2500 ms
+                    val left2 = deadline - SystemClock.uptimeMillis()
+                    if ((SystemClock.uptimeMillis() - t0) >= 2500L && left2 >= 300L) {
+                        fbTries++
+                        val res = limited(minOf(left2 - 50L, 1500L), Pair<Int?, String>(null, "terlalu lama")) {
+                            ShizukuHelper.readZoneId(null, wall - 300L)
+                        }
+                        if (res.first != null) {
+                            val at = SystemClock.uptimeMillis() - t0
+                            addLog("Baca log OK (cadangan): server ${res.first} ketemu di $at ms, percobaan ke-$fbTries (${res.second})")
+                            return res.first
+                        }
+                        reason(res.second)
+                    }
+                    sleepMs(minOf(100L, maxOf(deadline - SystemClock.uptimeMillis(), 0L)))
+                } else if (opens < 3) {
+                    opens++
+                    val o = limited(minOf(left - 20L, 1000L).coerceAtLeast(50L),
+                        Pair<ShizukuHelper.ZoneStream?, String>(null, "terlalu lama")) {
+                        ShizukuHelper.openZoneStream(curPid)
+                    }
+                    if (o.first != null) {
+                        stream = o.first
+                        addLog("Stream log dibuka di ${SystemClock.uptimeMillis() - t0} ms (pid=$curPid)")
+                    } else {
+                        reason("buka stream: " + o.second)
+                        sleepMs(minOf(100L, maxOf(deadline - SystemClock.uptimeMillis(), 0L)))
+                    }
+                } else {
+                    // Pembaca log gagal 3 kali: baca satu-satu dengan PID
+                    if (left >= 300L) {
+                        fbTries++
+                        val res = limited(minOf(left - 50L, 1500L), Pair<Int?, String>(null, "terlalu lama")) {
+                            ShizukuHelper.readZoneId(curPid, wall - 300L)
+                        }
+                        if (res.first != null) {
+                            val at = SystemClock.uptimeMillis() - t0
+                            addLog("Baca log OK (cadangan): server ${res.first} ketemu di $at ms, percobaan ke-$fbTries (${res.second})")
+                            return res.first
+                        }
+                        reason(res.second)
+                    }
+                    sleepMs(minOf(100L, maxOf(deadline - SystemClock.uptimeMillis(), 0L)))
                 }
             }
-
-            // Baca log
-            val left2 = deadline - SystemClock.uptimeMillis()
-            if (left2 < 120) break
-            val curPid = pid
-            val useFallback = curPid == null && (SystemClock.uptimeMillis() - t0) >= 2500L
-            if (curPid != null || useFallback) {
-                tries++
-                val res = limited(minOf(left2 - 50L, 1500L), Pair<Int?, String>(null, "terlalu lama")) {
-                    ShizukuHelper.readZoneId(curPid, wall - 300L)
-                }
-                if (res.first != null) {
-                    val at = SystemClock.uptimeMillis() - t0
-                    addLog("Baca log OK: server ${res.first} ketemu di $at ms, percobaan ke-$tries (${res.second})")
-                    return res.first
-                }
-                if (reasons.size < 3 && !reasons.contains(res.second)) reasons.add(res.second)
+        } finally {
+            val s = stream
+            if (s != null) {
+                lastLines = s.lines
+                closeAsync(s)
             }
-
-            // Menjelang akhir jatah, hitung baris log proses (untuk diagnosa)
-            val left3 = deadline - SystemClock.uptimeMillis()
-            if (!diagDone && curPid != null && left3 < 600 && left3 > 200) {
-                diagDone = true
-                diag = limited(minOf(left3 - 100L, 400L), "(timeout)") {
-                    ShizukuHelper.logLineCount(curPid)
-                }
-            }
-
-            val gap = deadline - SystemClock.uptimeMillis()
-            if (gap <= 0) break
-            sleepMs(minOf(150L, gap))
         }
 
         addLog(
-            "Baca log: $tries percobaan, server tidak ketemu" +
+            "Baca log: stream dibuka $opens kali, server tidak ketemu" +
                 (if (pid != null) " (PID $pid)" else " (PID tidak ketemu)")
         )
         for (r in reasons) addLog("  alasan: $r")
-        if (diag.isNotEmpty()) addLog("  baris log proses: $diag")
+        if (opens > 0) addLog("  baris log dibaca: $lastLines")
         return null
     }
 
