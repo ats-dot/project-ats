@@ -146,6 +146,9 @@ class RunnerService : Service() {
     @Volatile private var lastUsedAccess = false
     @Volatile private var debugSaved = false
 
+    // Layar depan sudah dicek untuk aplikasi yang sedang dibaca (sekali per aplikasi)
+    @Volatile private var fgOk = false
+
     // Catatan waktu langkah baca layar lewat Shizuku (untuk log)
     @Volatile private var shDone = ""
     @Volatile private var shNow = ""
@@ -267,19 +270,25 @@ class RunnerService : Service() {
         return res ?: Pair(null, if (ok) "tanpa hasil" else "terlalu lama (batas $limit ms)")
     }
 
-    // Jalur utama: cek aplikasi di layar depan lewat Shizuku (harus aplikasi
-    // yang dicentang), potret layar lewat Shizuku, lalu baca teksnya (OCR).
-    private fun readViaShizuku(budget: Long): Pair<Int?, String> {
+    // Jalur utama: cek layar depan (sekali per aplikasi, harus aplikasi yang
+    // dicentang), potret layar lewat Shizuku, lalu baca teksnya (OCR).
+    // full = false: pita sempit (cepat). full = true: layar penuh (cadangan).
+    private fun readViaShizuku(budget: Long, full: Boolean): Pair<Int?, String> {
         shDone = ""
-        shNow = "cek layar depan"
-        val t0 = SystemClock.uptimeMillis()
-        val fg = ShizukuHelper.foregroundPackage()
-        val tFg = SystemClock.uptimeMillis() - t0
-        shDone = "cek layar depan $tFg ms"
         shNow = ""
-        val pkg = fg.first ?: return Pair(null, fg.second)
-        if (pkg !in AtsAccessibilityService.allowed) {
-            return Pair(null, "layar depan '$pkg' bukan aplikasi yang dicentang")
+        val t0 = SystemClock.uptimeMillis()
+
+        if (!fgOk) {
+            shNow = "cek layar depan"
+            val fg = ShizukuHelper.foregroundPackage()
+            val tFg = SystemClock.uptimeMillis() - t0
+            shDone = "cek layar depan $tFg ms"
+            shNow = ""
+            val pkg = fg.first ?: return Pair(null, fg.second)
+            if (pkg !in AtsAccessibilityService.allowed) {
+                return Pair(null, "layar depan '$pkg' bukan aplikasi yang dicentang")
+            }
+            fgOk = true
         }
 
         shNow = "potret layar"
@@ -289,13 +298,13 @@ class RunnerService : Service() {
         shNow = ""
         val bmp = cap.first
         if (bmp == null) {
-            shDone += ", potret gagal $tCap ms"
+            shDone += (if (shDone.isEmpty()) "" else ", ") + "potret gagal $tCap ms"
             return Pair(null, cap.second)
         }
-        shDone += ", potret $tCap ms (${bmp.width}x${bmp.height})"
+        shDone += (if (shDone.isEmpty()) "" else ", ") + "potret $tCap ms (${bmp.width}x${bmp.height})"
 
         val left = budget - (SystemClock.uptimeMillis() - t0)
-        if (left < 300) {
+        if (left < 250) {
             try {
                 bmp.recycle()
             } catch (e: Throwable) {
@@ -308,7 +317,7 @@ class RunnerService : Service() {
         val latch = CountDownLatch(1)
         var r: Int? = null
         AtsAccessibilityService.lastReason = ""
-        AtsAccessibilityService.ocrBitmap(bmp) {
+        AtsAccessibilityService.ocrBitmap(bmp, full) {
             r = it
             latch.countDown()
         }
@@ -353,14 +362,14 @@ class RunnerService : Service() {
     }
 
     // Satu kali baca: Shizuku dulu, kalau gagal baru aksesibilitas.
-    private fun readOnce(waitMs: Long): Pair<Int?, String> {
+    private fun readOnce(waitMs: Long, full: Boolean): Pair<Int?, String> {
         val start = SystemClock.uptimeMillis()
         lastUsedAccess = false
         lastDetail = ""
         val reasons = ArrayList<String>()
 
         if (ShizukuHelper.hasPermission()) {
-            val r = runLimited(waitMs) { readViaShizuku(waitMs - 150L) }
+            val r = runLimited(waitMs) { readViaShizuku(waitMs - 120L, full) }
             if (r.first != null) {
                 lastSource = "Shizuku"
                 lastDetail = "waktu: $shDone"
@@ -376,7 +385,7 @@ class RunnerService : Service() {
         val left = waitMs - (SystemClock.uptimeMillis() - start)
         if (AtsAccessibilityService.instance == null) {
             reasons.add("Aksesibilitas: layanan mati")
-        } else if (left < 700) {
+        } else if (left < 1200) {
             reasons.add("Aksesibilitas: sisa waktu terlalu sempit")
         } else {
             lastUsedAccess = true
@@ -408,25 +417,28 @@ class RunnerService : Service() {
         }
     }
 
-    // Baca server di akhir jatah waktu: mulai di "rs" (paling lambat 1500 ms
-    // sebelum jatah habis). Diulang rapat (jarak 400 ms lewat Shizuku).
-    // Begitu ketemu, berhenti membaca. Sisa jatah tetap ditunggu di pemanggil.
+    // Baca server mulai di "rs" (paling lambat 1500 ms sebelum jatah habis).
+    // Diulang rapat (jarak 250 ms lewat Shizuku). Percobaan biasa membaca
+    // pita sempit; setiap percobaan ke-4 membaca layar penuh sebagai cadangan.
+    // Begitu ketemu, berhenti membaca. Sisa jatah ditunggu di pemanggil.
     private fun readUntil(t0: Long, rs: Long, deadline: Long): Int? {
+        fgOk = false
         sleepUntil(minOf(t0 + rs, deadline - 1500L))
         val startedAt = SystemClock.uptimeMillis() - t0
         var tries = 0
         val reasons = ArrayList<String>()
         while (!stopRequested) {
             val left = deadline - SystemClock.uptimeMillis()
-            if (left < 500) break
+            if (left < 400) break
             tries++
-            val res = readOnce(minOf(left - 50, 4000L))
+            val full = tries % 4 == 0
+            val res = readOnce(minOf(left - 50, 2500L), full)
             if (res.first != null) {
                 val at = SystemClock.uptimeMillis() - t0
                 val d = if (lastDetail.isNotEmpty()) " [$lastDetail]" else ""
                 val o = AtsAccessibilityService.lastOcrInfo
                 addLog(
-                    "Baca layar OK ($lastSource), percobaan ke-$tries, selesai di $at ms$d" +
+                    "Baca layar OK ($lastSource), percobaan ke-$tries, ketemu di $at ms$d" +
                         (if (o.isNotEmpty()) " (OCR $o)" else "")
                 )
                 return res.first
@@ -434,7 +446,7 @@ class RunnerService : Service() {
             if (reasons.size < 3 && !reasons.contains(res.second)) reasons.add(res.second)
             val gap = deadline - SystemClock.uptimeMillis()
             if (gap <= 0) break
-            sleepMs(minOf(if (lastUsedAccess) 1100L else 400L, gap))
+            sleepMs(minOf(if (lastUsedAccess) 1100L else 250L, gap))
         }
         addLog("Baca layar: $tries percobaan (mulai di $startedAt ms), tidak ketemu")
         for (r in reasons) addLog("  alasan: $r")
