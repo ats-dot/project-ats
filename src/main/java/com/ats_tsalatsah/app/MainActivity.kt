@@ -37,23 +37,6 @@ class MainActivity : Activity() {
         web.loadUrl("file:///android_asset/index.html")
     }
 
-    override fun onResume() {
-        super.onResume()
-        // Nyalakan aksesibilitas otomatis (kalau Shizuku diizinkan), hasilnya dicatat di log
-        Thread {
-            try {
-                if (ShizukuHelper.hasPermission() && !AtsAccessibilityService.isReady()) {
-                    val rep = ShizukuHelper.enableAccessibility()
-                    RunnerService.addLog(
-                        "Buka app, nyalakan aksesibilitas " +
-                            (if (rep.first) "OK: " else "GAGAL: ") + rep.second
-                    )
-                }
-            } catch (e: Exception) {
-            }
-        }.start()
-    }
-
     override fun onBackPressed() {
         if (web.canGoBack()) web.goBack() else super.onBackPressed()
     }
@@ -90,11 +73,11 @@ class MainActivity : Activity() {
             return arr.toString()
         }
 
-        // pkgsJson = ["com.a","com.b"], d1, d2, d3, rs dalam milidetik
+        // pkgsJson = ["com.a","com.b"], d1, d2, d3 dalam milidetik
         @JavascriptInterface
         fun start(
             pkgsJson: String, d1: String, d2: String, d3: String,
-            rs: String, target: String, back: Boolean
+            target: String, back: Boolean
         ) {
             val arr = JSONArray(pkgsJson)
             val pkgs = Array(arr.length()) { arr.getString(it) }
@@ -103,7 +86,6 @@ class MainActivity : Activity() {
             i.putExtra("d1", d1.toLongOrNull() ?: 7450L)
             i.putExtra("d2", d2.toLongOrNull() ?: 6500L)
             i.putExtra("d3", d3.toLongOrNull() ?: 600L)
-            i.putExtra("rs", rs.toLongOrNull() ?: 5000L)
             i.putExtra("target", target.toIntOrNull() ?: 0)
             i.putExtra("back", back)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
@@ -125,7 +107,6 @@ class MainActivity : Activity() {
         fun status(): String {
             val o = JSONObject(RunnerService.statusJson())
             o.put("overlay", Settings.canDrawOverlays(this@MainActivity))
-            o.put("access", AtsAccessibilityService.isReady())
             o.put("shizukuRun", ShizukuHelper.isRunning())
             o.put("shizuku", ShizukuHelper.hasPermission())
             return o.toString()
@@ -135,12 +116,6 @@ class MainActivity : Activity() {
         @JavascriptInterface
         fun overlay() {
             open(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-        }
-
-        // Buka setelan Aksesibilitas
-        @JavascriptInterface
-        fun access() {
-            open(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
 
         // Minta izin Shizuku
