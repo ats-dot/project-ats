@@ -141,18 +141,6 @@ class RunnerService : Service() {
 
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var stopRequested = false
-    @Volatile private var lastSource = ""
-    @Volatile private var lastDetail = ""
-    @Volatile private var lastUsedAccess = false
-    @Volatile private var debugSaved = false
-
-    // Layar depan sudah dicek untuk aplikasi yang sedang dibaca (sekali per aplikasi)
-    @Volatile private var fgOk = false
-
-    // Catatan waktu langkah baca layar lewat Shizuku (untuk log)
-    @Volatile private var shDone = ""
-    @Volatile private var shNow = ""
-
     private var capsule: TextView? = null
 
     override fun onCreate() {
@@ -173,14 +161,13 @@ class RunnerService : Service() {
         val d1 = intent.getLongExtra("d1", 7450L)
         val d2 = intent.getLongExtra("d2", 6500L)
         val d3 = intent.getLongExtra("d3", 600L)
-        val rs = intent.getLongExtra("rs", 5000L)
         val target = intent.getIntExtra("target", 0)
         val back = intent.getBooleanExtra("back", false)
 
         startAsForeground()
         running = true
         stopRequested = false
-        Thread { runAll(pkgs.toList(), d1, d2, d3, rs, target, back) }.start()
+        Thread { runAll(pkgs.toList(), d1, d2, d3, target, back) }.start()
         return START_NOT_STICKY
     }
 
@@ -252,202 +239,98 @@ class RunnerService : Service() {
         }
     }
 
-    // Jalankan pekerjaan di thread terpisah dengan batas waktu
-    private fun runLimited(limit: Long, job: () -> Pair<Int?, String>): Pair<Int?, String> {
+    // Jalankan pekerjaan di thread terpisah dengan batas waktu,
+    // supaya tidak pernah menggantung dan jatah waktu tetap seragam.
+    private fun <T> limited(limit: Long, fallback: T, job: () -> T): T {
         val latch = CountDownLatch(1)
-        var res: Pair<Int?, String>? = null
+        var res: T = fallback
         val th = Thread {
             try {
                 res = job()
             } catch (e: Throwable) {
-                res = Pair(null, "error: " + e.javaClass.simpleName + " " + (e.message ?: ""))
             }
             latch.countDown()
         }
         th.isDaemon = true
         th.start()
-        val ok = latch.await(limit, TimeUnit.MILLISECONDS)
-        return res ?: Pair(null, if (ok) "tanpa hasil" else "terlalu lama (batas $limit ms)")
+        latch.await(limit, TimeUnit.MILLISECONDS)
+        return res
     }
 
-    // Jalur utama: cek layar depan (sekali per aplikasi, harus aplikasi yang
-    // dicentang), potret layar lewat Shizuku, lalu baca area sekitar tulisan (OCR).
-    private fun readViaShizuku(budget: Long): Pair<Int?, String> {
-        shDone = ""
-        shNow = ""
-        val t0 = SystemClock.uptimeMillis()
-
-        if (!fgOk) {
-            shNow = "cek layar depan"
-            val fg = ShizukuHelper.foregroundPackage()
-            val tFg = SystemClock.uptimeMillis() - t0
-            shDone = "cek layar depan $tFg ms"
-            shNow = ""
-            val pkg = fg.first ?: return Pair(null, fg.second)
-            if (pkg !in AtsAccessibilityService.allowed) {
-                return Pair(null, "layar depan '$pkg' bukan aplikasi yang dicentang")
-            }
-            fgOk = true
-        }
-
-        shNow = "potret layar"
-        val c0 = SystemClock.uptimeMillis()
-        val cap = ShizukuHelper.captureScreen()
-        val tCap = SystemClock.uptimeMillis() - c0
-        shNow = ""
-        val bmp = cap.first
-        if (bmp == null) {
-            shDone += (if (shDone.isEmpty()) "" else ", ") + "potret gagal $tCap ms"
-            return Pair(null, cap.second)
-        }
-        shDone += (if (shDone.isEmpty()) "" else ", ") + "potret $tCap ms (${bmp.width}x${bmp.height})"
-
-        val left = budget - (SystemClock.uptimeMillis() - t0)
-        if (left < 250) {
-            try {
-                bmp.recycle()
-            } catch (e: Throwable) {
-            }
-            return Pair(null, "waktu habis sebelum baca teks")
-        }
-
-        shNow = "baca teks (OCR)"
-        val o0 = SystemClock.uptimeMillis()
-        val latch = CountDownLatch(1)
-        var r: Int? = null
-        AtsAccessibilityService.lastReason = ""
-        AtsAccessibilityService.ocrBitmap(bmp) {
-            r = it
-            latch.countDown()
-        }
-        val ok = latch.await(left, TimeUnit.MILLISECONDS)
-        if (ok) {
-            val tOcr = SystemClock.uptimeMillis() - o0
-            shNow = ""
-            shDone += ", baca teks $tOcr ms"
-        }
-        if (r != null) return Pair(r, "")
-        val why = AtsAccessibilityService.lastReason
-        return Pair(
-            null,
-            if (!ok) "baca teks terlalu lama" + (if (why.isNotEmpty()) " -> $why" else "")
-            else if (why.isNotEmpty()) why
-            else "baca teks gagal tanpa alasan"
-        )
-    }
-
-    // Jalur cadangan: screenshot lewat layanan aksesibilitas.
-    private fun readViaAccessibility(waitMs: Long): Pair<Int?, String> {
-        val svc = AtsAccessibilityService.instance
-            ?: return Pair(null, "layanan mati")
-        AtsAccessibilityService.lastReason = ""
-        val latch = CountDownLatch(1)
-        var r: Int? = null
-        main.post {
-            svc.readServer {
-                r = it
-                latch.countDown()
-            }
-        }
-        val ok = latch.await(waitMs, TimeUnit.MILLISECONDS)
-        if (r != null) return Pair(r, "")
-        val why = AtsAccessibilityService.lastReason
-        return Pair(
-            null,
-            if (why.isNotEmpty()) why
-            else if (!ok) "tidak ada jawaban (timeout)"
-            else "gagal tanpa alasan"
-        )
-    }
-
-    // Satu kali baca: Shizuku dulu, kalau gagal baru aksesibilitas.
-    private fun readOnce(waitMs: Long): Pair<Int?, String> {
-        val start = SystemClock.uptimeMillis()
-        lastUsedAccess = false
-        lastDetail = ""
-        val reasons = ArrayList<String>()
-
-        if (ShizukuHelper.hasPermission()) {
-            val r = runLimited(waitMs) { readViaShizuku(waitMs - 120L) }
-            if (r.first != null) {
-                lastSource = "Shizuku"
-                lastDetail = "waktu: $shDone"
-                return r
-            }
-            val trace = "waktu: " + (if (shDone.isEmpty()) "-" else shDone) +
-                (if (shNow.isNotEmpty()) ", macet di: $shNow" else "")
-            reasons.add("Shizuku: " + r.second + " [" + trace + "]")
-        } else {
-            reasons.add("Shizuku: belum diizinkan")
-        }
-
-        val left = waitMs - (SystemClock.uptimeMillis() - start)
-        if (AtsAccessibilityService.instance == null) {
-            reasons.add("Aksesibilitas: layanan mati")
-        } else if (left < 1200) {
-            reasons.add("Aksesibilitas: sisa waktu terlalu sempit")
-        } else {
-            lastUsedAccess = true
-            val r = readViaAccessibility(left)
-            if (r.first != null) {
-                lastSource = "Aksesibilitas"
-                return r
-            }
-            reasons.add("Aksesibilitas: " + r.second)
-        }
-        return Pair(null, reasons.joinToString(" | "))
-    }
-
-    // Simpan satu foto layar ke Download (sekali per sesi, hanya kalau
-    // yang di layar depan adalah aplikasi yang dicentang).
-    private fun saveShotOnce() {
-        if (debugSaved) return
-        debugSaved = true
-        try {
-            val fg = ShizukuHelper.foregroundPackage().first
-            if (fg == null || fg !in AtsAccessibilityService.allowed) {
-                addLog("Foto layar tidak disimpan: layar depan bukan aplikasi yang dicentang")
-                return
-            }
-            val r = ShizukuHelper.saveDebugShot("ats_debug.png")
-            addLog("Foto layar pemeriksaan ($fg): " + (if (r.first) "OK, " else "GAGAL, ") + r.second)
-        } catch (e: Throwable) {
-            addLog("Foto layar error: " + (e.message ?: "?"))
-        }
-    }
-
-    // Baca server mulai di "rs" (paling lambat 1500 ms sebelum jatah habis).
-    // Diulang rapat (jarak 250 ms lewat Shizuku), selalu membaca area sempit.
-    // Begitu ketemu, berhenti membaca. Sisa jatah ditunggu di pemanggil.
-    private fun readUntil(t0: Long, rs: Long, deadline: Long): Int? {
-        fgOk = false
-        sleepUntil(minOf(t0 + rs, deadline - 1500L))
-        val startedAt = SystemClock.uptimeMillis() - t0
+    // Baca server dari logcat, selama jatah waktu aplikasi ini.
+    // 1) Cari PID aplikasi (diulang tiap ~150 ms sampai ketemu).
+    // 2) Baca log milik PID itu tiap ~150 ms, cari "ZoneID = N".
+    // Cadangan: kalau PID belum ketemu setelah 2500 ms, baca log umum sejak
+    // aplikasi dibuka (hanya angka server yang valid yang diambil).
+    // Begitu ketemu, berhenti. Sisa jatah ditunggu oleh pemanggil.
+    private fun readUntil(pkg: String, t0: Long, wall: Long, deadline: Long): Int? {
+        var pid: Int? = null
         var tries = 0
+        var lastPidCheck = 0L
         val reasons = ArrayList<String>()
+        var diag = ""
+        var diagDone = false
+
         while (!stopRequested) {
-            val left = deadline - SystemClock.uptimeMillis()
-            if (left < 400) break
-            tries++
-            val res = readOnce(minOf(left - 50, 2500L))
-            if (res.first != null) {
-                val at = SystemClock.uptimeMillis() - t0
-                val d = if (lastDetail.isNotEmpty()) " [$lastDetail]" else ""
-                val o = AtsAccessibilityService.lastOcrInfo
-                addLog(
-                    "Baca layar OK ($lastSource), percobaan ke-$tries, ketemu di $at ms$d" +
-                        (if (o.isNotEmpty()) " (OCR $o)" else "")
-                )
-                return res.first
+            val now = SystemClock.uptimeMillis()
+            val left = deadline - now
+            if (left < 120) break
+
+            // Cari atau segarkan PID
+            if (now - lastPidCheck >= (if (pid == null) 150L else 1500L)) {
+                lastPidCheck = now
+                val pr = limited(minOf(left - 50L, 1200L), Pair<Int?, String>(null, "terlalu lama")) {
+                    ShizukuHelper.pidOf(pkg)
+                }
+                if (pr.first != null) {
+                    if (pr.first != pid) {
+                        addLog("PID $pkg = ${pr.first}, ketemu di ${SystemClock.uptimeMillis() - t0} ms")
+                        pid = pr.first
+                    }
+                } else if (pid == null) {
+                    val why = "PID: " + pr.second
+                    if (reasons.size < 3 && !reasons.contains(why)) reasons.add(why)
+                }
             }
-            if (reasons.size < 3 && !reasons.contains(res.second)) reasons.add(res.second)
+
+            // Baca log
+            val left2 = deadline - SystemClock.uptimeMillis()
+            if (left2 < 120) break
+            val curPid = pid
+            val useFallback = curPid == null && (SystemClock.uptimeMillis() - t0) >= 2500L
+            if (curPid != null || useFallback) {
+                tries++
+                val res = limited(minOf(left2 - 50L, 1500L), Pair<Int?, String>(null, "terlalu lama")) {
+                    ShizukuHelper.readZoneId(curPid, wall - 300L)
+                }
+                if (res.first != null) {
+                    val at = SystemClock.uptimeMillis() - t0
+                    addLog("Baca log OK: server ${res.first} ketemu di $at ms, percobaan ke-$tries (${res.second})")
+                    return res.first
+                }
+                if (reasons.size < 3 && !reasons.contains(res.second)) reasons.add(res.second)
+            }
+
+            // Menjelang akhir jatah, hitung baris log proses (untuk diagnosa)
+            val left3 = deadline - SystemClock.uptimeMillis()
+            if (!diagDone && curPid != null && left3 < 600 && left3 > 200) {
+                diagDone = true
+                diag = limited(minOf(left3 - 100L, 400L), "(timeout)") {
+                    ShizukuHelper.logLineCount(curPid)
+                }
+            }
+
             val gap = deadline - SystemClock.uptimeMillis()
             if (gap <= 0) break
-            sleepMs(minOf(if (lastUsedAccess) 1100L else 250L, gap))
+            sleepMs(minOf(150L, gap))
         }
-        addLog("Baca layar: $tries percobaan (mulai di $startedAt ms), tidak ketemu")
+
+        addLog(
+            "Baca log: $tries percobaan, server tidak ketemu" +
+                (if (pid != null) " (PID $pid)" else " (PID tidak ketemu)")
+        )
         for (r in reasons) addLog("  alasan: $r")
-        saveShotOnce()
+        if (diag.isNotEmpty()) addLog("  baris log proses: $diag")
         return null
     }
 
@@ -466,46 +349,22 @@ class RunnerService : Service() {
         addLog((if (r.first) "Recent $pkg: " else "Recent $pkg GAGAL: ") + r.second)
     }
 
-    private fun ensureAccessibility() {
-        if (AtsAccessibilityService.instance != null) return
-        if (!ShizukuHelper.hasPermission()) {
-            addLog("Aksesibilitas mati dan Shizuku belum diizinkan")
-            return
-        }
-        addLog("Aksesibilitas mati, menyalakan lewat Shizuku")
-        val rep = ShizukuHelper.enableAccessibility()
-        addLog("Hasil penyalaan " + (if (rep.first) "OK: " else "GAGAL: ") + rep.second)
-        var t = 0
-        while (AtsAccessibilityService.instance == null && t < 40 && !stopRequested) {
-            Thread.sleep(100)
-            t++
-        }
-        addLog(
-            if (AtsAccessibilityService.instance != null) "Layanan aksesibilitas hidup"
-            else "Layanan aksesibilitas TIDAK hidup setelah menunggu 4 detik"
-        )
-    }
-
-    private fun runAll(pkgs: List<String>, d1: Long, d2: Long, d3: Long, rs: Long, target: Int, back: Boolean) {
+    private fun runAll(pkgs: List<String>, d1: Long, d2: Long, d3: Long, target: Int, back: Boolean) {
         done = 0
         found = 0
         total = pkgs.size
-        debugSaved = false
         val map = LinkedHashMap<Int, String>()
         setServers(map)
 
         addLog("$MARK ${dateFmt.format(Date())} =====")
-        addLog("Jeda 1 = $d1 ms, jeda 2 = $d2 ms, jeda tengah = $d3 ms, mulai baca = $rs ms, target = $target")
-        ensureAccessibility()
-        AtsAccessibilityService.updateAllowed(pkgs.toSet())
+        addLog("Jeda 1 = $d1 ms, jeda 2 = $d2 ms, jeda tengah = $d3 ms, target = $target")
 
         if (!ShizukuHelper.hasPermission()) {
-            addLog("Shizuku belum aktif/diizinkan. Cek tab Setelan.")
-            if (AtsAccessibilityService.instance == null) {
-                addLog("Aksesibilitas juga mati, server tidak akan terbaca.")
-            }
-        } else if (AtsAccessibilityService.instance == null) {
-            addLog("Aksesibilitas mati, baca layar memakai Shizuku saja.")
+            addLog("Shizuku belum aktif/diizinkan. Buka Shizuku dan beri izin, lalu coba lagi.")
+            phase = "Dihentikan"
+            running = false
+            main.post { stopSelf() }
+            return
         }
 
         // Putaran 1: tiap aplikasi dapat jatah waktu tetap (jeda 1)
@@ -517,6 +376,7 @@ class RunnerService : Service() {
                 addLog("Target $target server tercapai, sisa aplikasi dilewati")
                 break
             }
+            val wall = System.currentTimeMillis()
             val t0 = SystemClock.uptimeMillis()
             if (!launch(pkg)) {
                 addLog("Gagal buka $pkg")
@@ -525,7 +385,7 @@ class RunnerService : Service() {
             }
             addLog("Buka $pkg")
             val deadline = t0 + d1
-            val s = readUntil(t0, rs, deadline)
+            val s = readUntil(pkg, t0, wall, deadline)
             // Walau sudah terbaca, tetap tunggu sampai jatah habis
             sleepUntil(deadline)
 
