@@ -120,6 +120,67 @@ class RunnerService : Service() {
             return true
         }
 
+        // Nomor baris tempat tiap sesi dimulai (urutan sama dengan di tampilan)
+        private fun sessionStarts(): List<Int> {
+            val st = ArrayList<Int>()
+            if (logs.isNotEmpty() && !logs[0].contains(MARK)) st.add(0)
+            for (i in logs.indices) {
+                if (logs[i].contains(MARK)) st.add(i)
+            }
+            return st
+        }
+
+        // Hapus hanya sesi terakhir. Arsip dan daftar server tidak disentuh.
+        fun clearLastSession(): Boolean {
+            if (running) return false
+            synchronized(logs) {
+                val st = sessionStarts()
+                if (st.isNotEmpty()) {
+                    logs.subList(st.last(), logs.size).clear()
+                    persist()
+                }
+            }
+            return true
+        }
+
+        // Hapus satu sesi arsip (nomor sesi mulai dari 0)
+        fun deleteSession(n: Int): Boolean {
+            if (running) return false
+            synchronized(logs) {
+                val st = sessionStarts()
+                if (n < 0 || n >= st.size) return false
+                val from = st[n]
+                val to = if (n + 1 < st.size) st[n + 1] else logs.size
+                logs.subList(from, to).clear()
+                persist()
+            }
+            return true
+        }
+
+        // Hapus semua arsip, sesi terakhir tetap ada
+        fun clearArchive(): Boolean {
+            if (running) return false
+            synchronized(logs) {
+                val st = sessionStarts()
+                if (st.size > 1) {
+                    logs.subList(0, st.last()).clear()
+                    persist()
+                }
+            }
+            return true
+        }
+
+        // Hapus hanya daftar server
+        fun clearServers(): Boolean {
+            if (running) return false
+            synchronized(logs) {
+                servers.clear()
+                persist()
+            }
+            found = 0
+            return true
+        }
+
         fun statusJson(): String {
             val o = JSONObject()
             o.put("running", running)
