@@ -271,9 +271,8 @@ class RunnerService : Service() {
     }
 
     // Jalur utama: cek layar depan (sekali per aplikasi, harus aplikasi yang
-    // dicentang), potret layar lewat Shizuku, lalu baca teksnya (OCR).
-    // full = false: pita sempit (cepat). full = true: layar penuh (cadangan).
-    private fun readViaShizuku(budget: Long, full: Boolean): Pair<Int?, String> {
+    // dicentang), potret layar lewat Shizuku, lalu baca area sekitar tulisan (OCR).
+    private fun readViaShizuku(budget: Long): Pair<Int?, String> {
         shDone = ""
         shNow = ""
         val t0 = SystemClock.uptimeMillis()
@@ -317,7 +316,7 @@ class RunnerService : Service() {
         val latch = CountDownLatch(1)
         var r: Int? = null
         AtsAccessibilityService.lastReason = ""
-        AtsAccessibilityService.ocrBitmap(bmp, full) {
+        AtsAccessibilityService.ocrBitmap(bmp) {
             r = it
             latch.countDown()
         }
@@ -362,14 +361,14 @@ class RunnerService : Service() {
     }
 
     // Satu kali baca: Shizuku dulu, kalau gagal baru aksesibilitas.
-    private fun readOnce(waitMs: Long, full: Boolean): Pair<Int?, String> {
+    private fun readOnce(waitMs: Long): Pair<Int?, String> {
         val start = SystemClock.uptimeMillis()
         lastUsedAccess = false
         lastDetail = ""
         val reasons = ArrayList<String>()
 
         if (ShizukuHelper.hasPermission()) {
-            val r = runLimited(waitMs) { readViaShizuku(waitMs - 120L, full) }
+            val r = runLimited(waitMs) { readViaShizuku(waitMs - 120L) }
             if (r.first != null) {
                 lastSource = "Shizuku"
                 lastDetail = "waktu: $shDone"
@@ -418,8 +417,7 @@ class RunnerService : Service() {
     }
 
     // Baca server mulai di "rs" (paling lambat 1500 ms sebelum jatah habis).
-    // Diulang rapat (jarak 250 ms lewat Shizuku). Percobaan biasa membaca
-    // pita sempit; setiap percobaan ke-4 membaca layar penuh sebagai cadangan.
+    // Diulang rapat (jarak 250 ms lewat Shizuku), selalu membaca area sempit.
     // Begitu ketemu, berhenti membaca. Sisa jatah ditunggu di pemanggil.
     private fun readUntil(t0: Long, rs: Long, deadline: Long): Int? {
         fgOk = false
@@ -431,8 +429,7 @@ class RunnerService : Service() {
             val left = deadline - SystemClock.uptimeMillis()
             if (left < 400) break
             tries++
-            val full = tries % 4 == 0
-            val res = readOnce(minOf(left - 50, 2500L), full)
+            val res = readOnce(minOf(left - 50, 2500L))
             if (res.first != null) {
                 val at = SystemClock.uptimeMillis() - t0
                 val d = if (lastDetail.isNotEmpty()) " [$lastDetail]" else ""
