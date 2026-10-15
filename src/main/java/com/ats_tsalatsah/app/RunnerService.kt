@@ -42,6 +42,8 @@ class RunnerService : Service() {
         @Volatile var total = 0
         @Volatile var found = 0
         @Volatile var phase = "Siap"
+        @Volatile var tapTestResult = ""
+        @Volatile var tapTestBusy = false
         private val logs = ArrayList<String>()
         private val servers = ArrayList<String>()
         private var prefs: SharedPreferences? = null
@@ -188,6 +190,8 @@ class RunnerService : Service() {
             o.put("total", total)
             o.put("found", found)
             o.put("phase", phase)
+            o.put("tapTest", tapTestResult)
+            o.put("tapBusy", tapTestBusy)
             val arr = JSONArray()
             val srv = JSONArray()
             synchronized(logs) {
@@ -204,6 +208,13 @@ class RunnerService : Service() {
     @Volatile private var stopRequested = false
     private var capsule: TextView? = null
 
+    // Pengaturan ketukan "Got it" (dibaca dari intent saat Mulai)
+    @Volatile private var tapOn = false
+    @Volatile private var tapMs = 3000L
+    @Volatile private var tapX = 1200
+    @Volatile private var tapY = 960
+    @Volatile private var tapActive = false
+
     override fun onCreate() {
         super.onCreate()
         initStore(this)
@@ -216,6 +227,10 @@ class RunnerService : Service() {
             stopRequested = true
             return START_NOT_STICKY
         }
+        if (intent != null && intent.action == "TAP_TEST") {
+            startTapTest(intent.getIntExtra("tapX", 1200), intent.getIntExtra("tapY", 960))
+            return START_NOT_STICKY
+        }
         if (running || intent == null) return START_NOT_STICKY
 
         val pkgs = intent.getStringArrayExtra("pkgs") ?: emptyArray()
@@ -224,6 +239,10 @@ class RunnerService : Service() {
         val d3 = intent.getLongExtra("d3", 600L)
         val target = intent.getIntExtra("target", 0)
         val back = intent.getBooleanExtra("back", false)
+        tapOn = intent.getBooleanExtra("tapOn", false)
+        tapMs = maxOf(0L, intent.getLongExtra("tapMs", 3000L))
+        tapX = intent.getIntExtra("tapX", 1200)
+        tapY = intent.getIntExtra("tapY", 960)
 
         startAsForeground()
         running = true
@@ -326,6 +345,82 @@ class RunnerService : Service() {
                 s.close()
             } catch (e: Throwable) {
             }
+        }
+        th.isDaemon = true
+        th.start()
+    }
+
+    // Ketukan "Got it" di thread sendiri, N ms setelah aplikasi dibuka (dihitung dari t0).
+    // Tidak menyentuh pembaca log. Batal kalau Hentikan ditekan atau jatah waktu habis.
+    private fun scheduleTap(t0: Long, d1: Long) {
+        val ms = tapMs
+        val x = tapX
+        val y = tapY
+        val th = Thread {
+            try {
+                addLog("Ketukan Got it: dijadwalkan $ms ms setelah dibuka (x=$x, y=$y)")
+                sleepUntil(t0 + ms)
+                if (stopRequested) {
+                    addLog("Ketukan Got it dibatalkan: tombol Hentikan ditekan")
+                    return@Thread
+                }
+                if (SystemClock.uptimeMillis() >= t0 + d1) {
+                    addLog("Ketukan Got it dibatalkan: jatah waktu sudah habis")
+                    return@Thread
+                }
+                val a = SystemClock.uptimeMillis() - t0
+                val r = ShizukuHelper.tap(x, y, 2000L)
+                val b = SystemClock.uptimeMillis() - t0
+                addLog(
+                    "Ketukan Got it: dikirim di $a ms, selesai di $b ms, hasil: " +
+                        (if (r.first) "OK" else "gagal: " + r.second)
+                )
+            } catch (e: Throwable) {
+            }
+        }
+        th.isDaemon = true
+        th.start()
+    }
+
+    // Tes ketuk dari Setelan: hitung mundur 5 detik, lalu satu ketukan ke (x, y).
+    // Jalan walau saklar mati. Tidak bisa saat sesi sedang berjalan.
+    private fun startTapTest(x: Int, y: Int) {
+        if (running) {
+            tapTestResult = "Tidak bisa dites saat sesi sedang berjalan. Hentikan dulu."
+            return
+        }
+        if (tapTestBusy) return
+        tapTestBusy = true
+        tapTestResult = "Ketukan dikirim dalam 5 detik, buka game yang menampilkan pengumuman sekarang"
+        addLog("Tes ketuk: dijadwalkan 5000 ms lagi (x=$x, y=$y)")
+        val th = Thread {
+            try {
+                val t0 = SystemClock.uptimeMillis()
+                while (true) {
+                    val left = t0 + 5000L - SystemClock.uptimeMillis()
+                    if (left <= 0) break
+                    val sec = (left + 999) / 1000
+                    tapTestResult = "Ketukan dikirim dalam $sec detik, buka game yang menampilkan pengumuman sekarang"
+                    Thread.sleep(minOf(left, 100L))
+                }
+                tapTestResult = "Mengetuk..."
+                val a = SystemClock.uptimeMillis() - t0
+                val r = ShizukuHelper.tap(x, y, 2000L)
+                val b = SystemClock.uptimeMillis() - t0
+                addLog(
+                    "Tes ketuk: dikirim di $a ms, selesai di $b ms, hasil: " +
+                        (if (r.first) "OK" else "gagal: " + r.second)
+                )
+                tapTestResult = if (r.first) {
+                    "Perintah ketuk berhasil dijalankan ke ($x, $y), selesai dalam ${b - a} ms. Cek apakah pengumuman tertutup."
+                } else {
+                    "Gagal: " + r.second
+                }
+            } catch (e: Throwable) {
+                tapTestResult = "Gagal: " + e.javaClass.simpleName
+            }
+            tapTestBusy = false
+            main.post { if (!running) stopSelf() }
         }
         th.isDaemon = true
         th.start()
@@ -466,6 +561,7 @@ class RunnerService : Service() {
             addLog("Gagal buka $pkg")
             return Pair(false, null)
         }
+        if (tapActive) scheduleTap(t0, d1)
         addLog("Buka $pkg")
         if (uid >= 0) {
             addLog("UID $pkg = $uid")
@@ -489,6 +585,11 @@ class RunnerService : Service() {
 
         addLog("$MARK ${dateFmt.format(Date())} =====")
         addLog("Jeda 1 = $d1 ms, jeda 2 = $d2 ms, jeda tengah = $d3 ms, target = $target")
+
+        tapActive = tapOn && tapMs < d1
+        if (tapOn && !tapActive) {
+            addLog("Ketukan Got it dilewati: $tapMs ms lebih besar atau sama dengan jeda 1 ($d1 ms)")
+        }
 
         if (!ShizukuHelper.hasPermission()) {
             addLog("Shizuku belum aktif/diizinkan. Buka Shizuku dan beri izin, lalu coba lagi.")
