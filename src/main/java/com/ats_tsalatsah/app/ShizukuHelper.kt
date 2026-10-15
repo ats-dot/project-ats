@@ -12,6 +12,8 @@ import rikka.shizuku.SystemServiceHelper
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 object ShizukuHelper {
 
@@ -236,6 +238,69 @@ object ShizukuHelper {
         } catch (e: Throwable) {
             val root = e.cause ?: e
             Pair(false, "gagal di langkah '$step': ${root.javaClass.simpleName} ${root.message ?: ""}")
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Ketuk layar satu kali (input tap x y)
+    // ---------------------------------------------------------------
+
+    // Ketuk satu titik di layar lewat Shizuku. Ada batas waktu limitMs;
+    // kalau proses macet, dilepas (dihentikan) dan dilaporkan gagal.
+    // Hasil: (berhasil, keterangan untuk log)
+    fun tap(x: Int, y: Int, limitMs: Long): Pair<Boolean, String> {
+        if (!hasPermission()) return Pair(false, "Shizuku belum diizinkan")
+        return try {
+            val p = start(arrayOf("input", "tap", x.toString(), y.toString()))
+
+            // Keluaran dibaca di thread sendiri supaya proses tidak tersumbat
+            var err = ""
+            val te = Thread {
+                try {
+                    err = p.errorStream.bufferedReader().readText()
+                } catch (e: Throwable) {
+                }
+            }
+            te.isDaemon = true
+            te.start()
+            val to = Thread {
+                try {
+                    p.inputStream.bufferedReader().readText()
+                } catch (e: Throwable) {
+                }
+            }
+            to.isDaemon = true
+            to.start()
+
+            // Tunggu proses selesai, tapi tidak lebih dari limitMs
+            var code = -1
+            val latch = CountDownLatch(1)
+            val tw = Thread {
+                try {
+                    code = p.waitFor()
+                } catch (e: Throwable) {
+                }
+                latch.countDown()
+            }
+            tw.isDaemon = true
+            tw.start()
+
+            if (!latch.await(limitMs, TimeUnit.MILLISECONDS)) {
+                try {
+                    p.destroy()
+                } catch (e: Throwable) {
+                }
+                return Pair(false, "macet lebih dari $limitMs ms, proses dilepas")
+            }
+            te.join(300)
+            if (code == 0) {
+                Pair(true, "OK")
+            } else {
+                Pair(false, "kode keluar $code, pesan: " + (if (err.trim().isEmpty()) "(kosong)" else err.trim().take(160)))
+            }
+        } catch (e: Throwable) {
+            val root = e.cause ?: e
+            Pair(false, "error: ${root.javaClass.simpleName} ${root.message ?: ""}")
         }
     }
 }
