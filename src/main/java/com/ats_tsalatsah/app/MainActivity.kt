@@ -111,10 +111,12 @@ class MainActivity : Activity() {
         }
 
         // pkgsJson = ["com.a","com.b"], d1, d2, d3 dalam milidetik
+        // tapOn = saklar ketukan, tapMs = waktu ketukan (ms), tapX/tapY = posisi ketukan
         @JavascriptInterface
         fun start(
             pkgsJson: String, d1: String, d2: String, d3: String,
-            target: String, back: Boolean
+            target: String, back: Boolean,
+            tapOn: Boolean, tapMs: String, tapX: String, tapY: String
         ) {
             val arr = JSONArray(pkgsJson)
             val pkgs = Array(arr.length()) { arr.getString(it) }
@@ -125,7 +127,23 @@ class MainActivity : Activity() {
             i.putExtra("d3", d3.toLongOrNull() ?: 600L)
             i.putExtra("target", target.toIntOrNull() ?: 0)
             i.putExtra("back", back)
+            i.putExtra("tapOn", tapOn)
+            i.putExtra("tapMs", tapMs.toLongOrNull() ?: 3000L)
+            i.putExtra("tapX", tapX.toIntOrNull() ?: 1200)
+            i.putExtra("tapY", tapY.toIntOrNull() ?: 960)
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        }
+
+        // Tes ketuk: hitung mundur 5 detik lalu satu ketukan ke (x, y).
+        // Pakai startService (bukan startForegroundService) karena
+        // aksi ini tidak memanggil startForeground di RunnerService.
+        @JavascriptInterface
+        fun tapTest(x: String, y: String) {
+            val i = Intent(this@MainActivity, RunnerService::class.java)
+            i.action = "TAP_TEST"
+            i.putExtra("tapX", x.toIntOrNull() ?: 1200)
+            i.putExtra("tapY", y.toIntOrNull() ?: 960)
+            startService(i)
         }
 
         @JavascriptInterface
