@@ -21,6 +21,7 @@ header h1{font-size:20px;margin:0;flex:1}
 .btn.sm{padding:8px 14px;font-size:13px}
 .btn.big{width:100%;padding:18px;font-size:18px;display:flex;align-items:center;justify-content:center;gap:10px}
 .btn:active{opacity:.6}
+.btn:disabled{opacity:.35}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 input[type=text],input[type=number]{width:100%;background:#000;color:#fff;border:1px solid #444;border-radius:14px;padding:11px 14px;font-size:15px}
 label{display:block;font-size:13px;color:#aaa;margin:10px 0 4px}
@@ -171,6 +172,30 @@ nav button.on{background:#fff;color:#000}
     </label>
   </div>
   <div class="card">
+    <h2>Ketukan di jeda 1</h2>
+    <label style="display:flex;align-items:center;gap:10px;color:#fff;margin-top:0">
+      <input type="checkbox" id="tapOn" style="width:22px;height:22px;accent-color:#fff"> Ketuk 'Got it' otomatis
+    </label>
+    <label>Waktu ketukan (ms setelah aplikasi dibuka)</label>
+    <input type="number" id="tapMs" inputmode="numeric">
+    <div class="hint" id="htap"></div>
+    <div class="row" style="flex-wrap:nowrap;align-items:flex-start">
+      <div style="flex:1">
+        <label>x</label>
+        <input type="number" id="tapX" inputmode="numeric">
+      </div>
+      <div style="flex:1">
+        <label>y</label>
+        <input type="number" id="tapY" inputmode="numeric">
+      </div>
+    </div>
+    <div class="hint">Layar mendatar 2400x1080. Cek lewat Opsi pengembang &gt; Lokasi penunjuk.</div>
+    <div class="row" style="margin-top:10px">
+      <button class="btn sm" id="btap">Tes ketuk</button>
+    </div>
+    <div class="hint" id="tapres"></div>
+  </div>
+  <div class="card">
     <h2>Izin</h2>
     <div class="st"><span><span class="dot" id="d_ov"></span>&nbsp; Tampil di atas aplikasi lain</span><button class="btn sm" id="bov">Atur</button></div>
     <div class="st"><span><span class="dot" id="d_sz"></span>&nbsp; Shizuku (baca log + force stop)</span><button class="btn sm" id="bsz">Atur</button></div>
@@ -190,7 +215,7 @@ nav button.on{background:#fff;color:#000}
 var $=function(id){return document.getElementById(id)};
 var A=window.App;
 var apps=[], sel={}, shown=[], openArc={};
-var S={d1:"7450",d2:"6500",d3:"600",target:"0",back:false,qf:""};
+var S={d1:"7450",d2:"6500",d3:"600",target:"0",back:false,qf:"",tapOn:false,tapMs:"3000",tapX:"1200",tapY:"960"};
 var lastLogKey="";
 var MARK="===== Sesi baru";
 var MON=["Jan","Feb","Mar","Apr","Mei","Jun","Jul","Agu","Sep","Okt","Nov","Des"];
@@ -208,13 +233,18 @@ function load(){
     }
   }catch(e){}
   if(!S.d3)S.d3="600";
+  if(!S.tapMs)S.tapMs="3000";
+  if(!S.tapX)S.tapX="1200";
+  if(!S.tapY)S.tapY="960";
   $("d1").value=S.d1;$("d2").value=S.d2;$("d3").value=S.d3;$("target").value=S.target;
   $("back").checked=!!S.back;$("qf").value=S.qf;
+  $("tapOn").checked=!!S.tapOn;$("tapMs").value=S.tapMs;$("tapX").value=S.tapX;$("tapY").value=S.tapY;
   hints();
 }
 function saveSet(){
   S.d1=$("d1").value;S.d2=$("d2").value;S.d3=$("d3").value;S.target=$("target").value;
   S.back=$("back").checked;S.qf=$("qf").value;
+  S.tapOn=$("tapOn").checked;S.tapMs=$("tapMs").value;S.tapX=$("tapX").value;S.tapY=$("tapY").value;
   try{localStorage.setItem("ats_set",JSON.stringify(S))}catch(e){}
   hints();
 }
@@ -229,13 +259,24 @@ function hintText(v){
   if(n<1000)t+='<br><b>Peringatan:</b> nilai di bawah 1000 (kurang dari 1 detik). Ingat, 1000 = 1 detik.';
   return t;
 }
+function tapHintText(){
+  var v=$("tapMs").value;
+  var t=hintText(v);
+  var d1=$("d1").value;
+  if(v!==""&&!isNaN(Number(v))&&d1!==""&&!isNaN(Number(d1))&&Number(v)>=Number(d1)){
+    t+='<br><b>Peringatan:</b> waktu ketukan lebih besar atau sama dengan jeda 1, jadi ketukan tidak dijalankan.';
+  }
+  return t;
+}
 function hints(){
   $("h1").innerHTML=hintText($("d1").value);
   $("h2").innerHTML=hintText($("d2").value);
   $("h3").innerHTML=hintText($("d3").value);
+  $("htap").innerHTML=tapHintText();
 }
-["d1","d2","d3","target","qf"].forEach(function(id){$(id).addEventListener("input",saveSet)});
+["d1","d2","d3","target","qf","tapMs","tapX","tapY"].forEach(function(id){$(id).addEventListener("input",saveSet)});
 $("back").addEventListener("change",saveSet);
+$("tapOn").addEventListener("change",saveSet);
 
 $("bminus").onclick=function(){var n=parseInt($("target").value||"0",10)||0;$("target").value=Math.max(0,n-1);saveSet()};
 $("bplus").onclick=function(){var n=parseInt($("target").value||"0",10)||0;$("target").value=n+1;saveSet()};
@@ -278,12 +319,16 @@ $("bstart").onclick=function(){
   var p=apps.filter(function(a){return sel[a.pkg]}).map(function(a){return a.pkg});
   if(!p.length){alert("Centang aplikasi dulu di tab Apps.");return}
   saveSet();
-  try{A.start(JSON.stringify(p),S.d1||"7450",S.d2||"6500",S.d3||"600",S.target||"0",!!S.back)}catch(e){}
+  try{A.start(JSON.stringify(p),S.d1||"7450",S.d2||"6500",S.d3||"600",S.target||"0",!!S.back,!!S.tapOn,S.tapMs||"3000",S.tapX||"1200",S.tapY||"960")}catch(e){}
 };
 $("bstop").onclick=function(){try{A.stop()}catch(e){}};
 $("bov").onclick=function(){try{A.overlay()}catch(e){}};
 $("bba").onclick=function(){try{A.battery()}catch(e){}};
 $("bsz").onclick=function(){try{A.shizuku()}catch(e){}};
+$("btap").onclick=function(){
+  saveSet();
+  try{A.tapTest(S.tapX||"1200",S.tapY||"960")}catch(e){}
+};
 
 // Tombol hapus: tanya dulu, jalankan, lalu segarkan tampilan
 function doDel(msg,fn){
@@ -411,6 +456,8 @@ function poll(){
   $("d_sz").className="dot"+(s.shizuku?" ok":"");
   $("p_ov").className="dot"+(s.overlay?" ok":"");
   $("p_sz").className="dot"+(s.shizuku?" ok":"");
+  $("btap").disabled=!!s.tapBusy;
+  $("tapres").textContent=s.tapTest||"";
   renderLog(s.logs||[]);
   var sv=s.servers||[];
   if(sv.length){
